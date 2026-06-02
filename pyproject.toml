@@ -8,16 +8,27 @@ dependencies = [
     "pandas",
     "polars",
     "pyarrow",
+
     "sqlalchemy",
     "psycopg[binary]",
     "alembic",
+
     "supabase",
+
     "fastapi",
     "uvicorn",
+
     "pydantic",
     "pydantic-settings",
+
     "python-dotenv",
+
     "loguru",
+
     "httpx",
-    "tenacity"
+    "tenacity",
+
+    "pytest",
+    "ruff",
+    "mypy"
 ]
