@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, UTC
 
 from etl.database.supabase_client import supabase
 
@@ -9,7 +9,7 @@ def main():
         .insert(
             {
                 "processo": "teste",
-                "inicio": datetime.utcnow().isoformat(),
+                "inicio": datetime.now(UTC).isoformat(),
                 "status": "SUCESSO",
                 "registros": 1,
                 "mensagem": "Primeiro teste do Sobral Invest"
