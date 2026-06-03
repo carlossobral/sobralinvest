@@ -1,11 +1,12 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = ""
-    supabase_url: str = ""
-    supabase_key: str = ""
-    mfinance_api_key: str = ""
+    database_url: str = Field(default="")
+    supabase_url: str = Field(default="")
+    supabase_key: str = Field(default="")
+    mfinance_api_key: str = Field(default="")
 
     model_config = SettingsConfigDict(
         env_file=".env",
