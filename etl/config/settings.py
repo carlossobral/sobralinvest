@@ -6,7 +6,6 @@ class Settings(BaseSettings):
     database_url: str = Field(default="")
     supabase_url: str = Field(default="")
     supabase_key: str = Field(default="")
-    mfinance_api_key: str = Field(default="")
 
     model_config = SettingsConfigDict(
         env_file=".env",
