@@ -8,7 +8,7 @@ def main():
         .execute()
     )
 
-    print(response)
+    print(response.data)
 
 
 if __name__ == "__main__":
