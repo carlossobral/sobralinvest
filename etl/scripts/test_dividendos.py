@@ -2,47 +2,42 @@ import httpx
 
 from etl.database.supabase_client import supabase
 
-
-URL_BASE = "https://mfinance.com.br/api/v1/stocks/dividends"
+URL = "https://mfinance.com.br/api/v1/stocks/dividends"
 
 
 def main():
+
     empresas = (
-        supabase
-        .table("empresas")
+        supabase.table("empresas")
         .select("ticker")
         .limit(50)
         .execute()
+        .data
     )
-
-    tickers = [e["ticker"] for e in empresas.data]
 
     sucesso = 0
     vazio = 0
-    null = 0
-    erro404 = 0
     erro = 0
+    null = 0
 
-    for i, ticker in enumerate(tickers, start=1):
-        print(f"[{i}/{len(tickers)}] {ticker}")
+    for i, empresa in enumerate(empresas, start=1):
+
+        ticker = empresa["ticker"]
+
+        print(f"[{i}/{len(empresas)}] {ticker}")
 
         try:
+
             response = httpx.get(
-                f"{URL_BASE}/{ticker}",
+                f"{URL}/{ticker}",
                 timeout=30
             )
 
-            if response.status_code == 404:
-                erro404 += 1
+            if response.status_code != 200:
+                vazio += 1
                 continue
-
-            response.raise_for_status()
 
             dados = response.json()
-
-            if dados is None:
-                null += 1
-                continue
 
             dividendos = dados.get("dividends")
 
@@ -54,18 +49,42 @@ def main():
                 vazio += 1
                 continue
 
+            # remove duplicados do próprio MFinance
+            vistos = set()
+            registros = []
+
+            for item in dividendos:
+
+                chave = (
+                    item.get("date"),
+                    item.get("type"),
+                    item.get("value")
+                )
+
+                if chave in vistos:
+                    continue
+
+                vistos.add(chave)
+
+                registros.append(
+                    {
+                        "ticker": ticker,
+                        "data_pagamento": item["date"][:10],
+                        "tipo": item["type"],
+                        "valor": item["value"],
+                    }
+                )
+
             sucesso += 1
 
-        except Exception as e:
-            print(f"Erro em {ticker}: {e}")
+        except Exception:
             erro += 1
 
     print("\n===== RESULTADO =====")
-    print(f"Sucesso : {sucesso}")
-    print(f"404     : {erro404}")
-    print(f"Null    : {null}")
-    print(f"Vazio   : {vazio}")
-    print(f"Erro    : {erro}")
+    print("Sucesso :", sucesso)
+    print("Null    :", null)
+    print("Vazio   :", vazio)
+    print("Erro    :", erro)
 
 
 if __name__ == "__main__":
