@@ -27,6 +27,21 @@ def main():
 
         dados = response.json()
 
+        print("\n===== DEBUG =====")
+        print("Tipo:", type(dados))
+
+        if isinstance(dados, list):
+            print("Quantidade:", len(dados))
+            print("Primeiros 3 registros:")
+            print(dados[:3])
+        else:
+            print("Conteúdo:")
+            print(dados)
+
+        print("=================\n")
+
+        return
+
         registros = []
 
         for item in dados:
