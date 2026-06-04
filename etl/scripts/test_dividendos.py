@@ -8,7 +8,8 @@ URL = "https://mfinance.com.br/api/v1/stocks/dividends"
 def main():
 
     empresas = (
-        supabase.table("empresas")
+        supabase
+        .table("empresas")
         .select("ticker")
         .limit(50)
         .execute()
@@ -17,8 +18,10 @@ def main():
 
     sucesso = 0
     vazio = 0
-    erro = 0
     null = 0
+    erro = 0
+
+    erros = []
 
     for i, empresa in enumerate(empresas, start=1):
 
@@ -35,6 +38,7 @@ def main():
 
             if response.status_code != 200:
                 vazio += 1
+                print(f"  -> HTTP {response.status_code}")
                 continue
 
             dados = response.json()
@@ -43,15 +47,17 @@ def main():
 
             if dividendos is None:
                 null += 1
+                print("  -> dividends = None")
                 continue
 
             if len(dividendos) == 0:
                 vazio += 1
+                print("  -> sem dividendos")
                 continue
 
-            # remove duplicados do próprio MFinance
+            # teste de duplicidade
             vistos = set()
-            registros = []
+            duplicados = 0
 
             for item in dividendos:
 
@@ -62,29 +68,44 @@ def main():
                 )
 
                 if chave in vistos:
-                    continue
+                    duplicados += 1
 
                 vistos.add(chave)
 
-                registros.append(
-                    {
-                        "ticker": ticker,
-                        "data_pagamento": item["date"][:10],
-                        "tipo": item["type"],
-                        "valor": item["value"],
-                    }
-                )
+            print(
+                f"  -> {len(dividendos)} eventos "
+                f"({duplicados} duplicados)"
+            )
 
             sucesso += 1
 
-        except Exception:
+        except Exception as e:
+
             erro += 1
 
+            erros.append(
+                {
+                    "ticker": ticker,
+                    "erro": str(e)
+                }
+            )
+
+            print(f"  -> ERRO: {e}")
+
     print("\n===== RESULTADO =====")
-    print("Sucesso :", sucesso)
-    print("Null    :", null)
-    print("Vazio   :", vazio)
-    print("Erro    :", erro)
+    print(f"Sucesso : {sucesso}")
+    print(f"Null    : {null}")
+    print(f"Vazio   : {vazio}")
+    print(f"Erro    : {erro}")
+
+    if erros:
+
+        print("\n===== DETALHE DOS ERROS =====")
+
+        for item in erros:
+            print(
+                f"{item['ticker']} -> {item['erro']}"
+            )
 
 
 if __name__ == "__main__":
