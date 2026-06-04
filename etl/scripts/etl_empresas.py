@@ -9,18 +9,15 @@ URL = "https://mfinance.com.br/api/v1/stocks"
 
 
 def registrar_carga(status: str, registros: int, mensagem: str):
-    try:
-        supabase.table("etl_cargas").insert(
-            {
-                "processo": "etl_empresas",
-                "inicio": datetime.now(UTC).isoformat(),
-                "status": status,
-                "registros": registros,
-                "mensagem": mensagem,
-            }
-        ).execute()
-    except Exception as erro:
-        print(f"Erro ao registrar carga: {erro}")
+    supabase.table("etl_cargas").insert(
+        {
+            "processo": "etl_empresas",
+            "inicio": datetime.now(UTC).isoformat(),
+            "status": status,
+            "registros": registros,
+            "mensagem": mensagem,
+        }
+    ).execute()
 
 
 def main():
@@ -30,20 +27,13 @@ def main():
         response = httpx.get(URL, timeout=120)
         response.raise_for_status()
 
-        dados = response.json()
+        payload = response.json()
 
-        if not isinstance(dados, list):
-            raise Exception(
-                f"Formato inesperado retornado pela API: {type(dados)}"
-            )
+        dados = payload.get("stocks", [])
 
         registros = []
 
         for item in dados:
-
-            if not isinstance(item, dict):
-                print(f"Registro ignorado: {item}")
-                continue
 
             ticker = item.get("symbol")
 
@@ -64,20 +54,10 @@ def main():
         print(f"Empresas encontradas: {len(registros)}")
 
         if registros:
-
-            resultado = (
-                supabase
-                .table("empresas")
-                .upsert(
-                    registros,
-                    on_conflict="ticker"
-                )
-                .execute()
-            )
-
-            print(
-                f"Empresas gravadas/atualizadas: {len(resultado.data)}"
-            )
+            supabase.table("empresas").upsert(
+                registros,
+                on_conflict="ticker"
+            ).execute()
 
         registrar_carga(
             status="SUCESSO",
@@ -85,7 +65,7 @@ def main():
             mensagem="Carga de empresas concluída"
         )
 
-        print("✅ ETL finalizado com sucesso")
+        print(f"✅ {len(registros)} empresas carregadas")
 
     except Exception as e:
 
