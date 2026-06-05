@@ -8,9 +8,8 @@ import pandas as pd
 from etl.database.supabase_client import supabase
 
 
-ANO_INICIAL = 2024
-ANO_FINAL = 2024
-##ANO_FINAL = datetime.now().year
+ANO_INICIAL = 2010
+ANO_FINAL = datetime.now().year
 
 
 BASE_URL = (
