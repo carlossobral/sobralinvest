@@ -18,9 +18,11 @@ def registrar_carga(status: str, registros: int, mensagem: str):
 
 
 def main():
+
     total_dividendos = 0
 
     try:
+
         empresas = (
             supabase.table("empresas")
             .select("ticker")
@@ -37,15 +39,14 @@ def main():
             print(f"[{i}/{len(empresas)}] {ticker}")
 
             try:
+
                 response = httpx.get(
                     f"https://mfinance.com.br/api/v1/stocks/dividends/{ticker}",
                     timeout=30,
                 )
 
-                if response.status_code == 404:
+                if response.status_code != 200:
                     continue
-
-                response.raise_for_status()
 
                 dados = response.json()
 
@@ -54,20 +55,28 @@ def main():
                 if not dividendos:
                     continue
 
-                registros = []
+                registros_unicos = {}
 
                 for item in dividendos:
 
-                    registros.append(
-                        {
-                            "ticker": ticker,
-                            "data_pagamento": item["date"][:10],
-                            "tipo": item["type"],
-                            "valor": item["value"],
-                        }
+                    chave = (
+                        ticker,
+                        item["date"][:10],
+                        item["type"],
+                        float(item["value"]),
                     )
 
+                    registros_unicos[chave] = {
+                        "ticker": ticker,
+                        "data_pagamento": item["date"][:10],
+                        "tipo": item["type"],
+                        "valor": item["value"],
+                    }
+
+                registros = list(registros_unicos.values())
+
                 if registros:
+
                     (
                         supabase.table("dividendos")
                         .upsert(
@@ -80,16 +89,16 @@ def main():
                     total_dividendos += len(registros)
 
             except Exception as e:
+
                 print(f"Erro em {ticker}: {e}")
 
         registrar_carga(
             status="SUCESSO",
             registros=total_dividendos,
-            mensagem=f"{total_dividendos} dividendos carregados"
+            mensagem=f"{total_dividendos} dividendos carregados",
         )
 
-        print()
-        print("========== FINAL ==========")
+        print("\n========== FINAL ==========")
         print(f"Dividendos carregados: {total_dividendos}")
 
     except Exception as e:
@@ -97,7 +106,7 @@ def main():
         registrar_carga(
             status="ERRO",
             registros=0,
-            mensagem=str(e)
+            mensagem=str(e),
         )
 
         raise
