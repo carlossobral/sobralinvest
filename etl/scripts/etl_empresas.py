@@ -24,26 +24,35 @@ def main():
     try:
         print("Buscando empresas na MFinance...")
 
-        response = httpx.get(URL, timeout=120)
+        response = httpx.get(URL, timeout=60)
+
         response.raise_for_status()
 
-        payload = response.json()
+        dados = response.json()
 
-        dados = payload.get("stocks", [])
+        stocks = dados.get("stocks", [])
 
         registros = []
 
-        for item in dados:
+        ignoradas = 0
 
-            ticker = item.get("symbol")
+        for item in stocks:
 
-            if not ticker:
+            nome = item.get("name")
+
+            # Ignora registros inválidos
+            if not nome:
+                ignoradas += 1
+                continue
+
+            if nome.strip() == "#N/A":
+                ignoradas += 1
                 continue
 
             registros.append(
                 {
-                    "ticker": ticker,
-                    "nome": item.get("name"),
+                    "ticker": item.get("symbol"),
+                    "nome": nome,
                     "setor": item.get("sector"),
                     "subsetor": item.get("subSector"),
                     "segmento": item.get("segment"),
@@ -51,21 +60,27 @@ def main():
                 }
             )
 
-        print(f"Empresas encontradas: {len(registros)}")
-
         if registros:
-            supabase.table("empresas").upsert(
-                registros,
-                on_conflict="ticker"
-            ).execute()
+
+            (
+                supabase.table("empresas")
+                .upsert(
+                    registros,
+                    on_conflict="ticker"
+                )
+                .execute()
+            )
 
         registrar_carga(
             status="SUCESSO",
             registros=len(registros),
-            mensagem="Carga de empresas concluída"
+            mensagem=f"{len(registros)} empresas carregadas. {ignoradas} ignoradas (#N/A)"
         )
 
-        print(f"✅ {len(registros)} empresas carregadas")
+        print()
+        print("========== FINAL ==========")
+        print(f"Empresas válidas : {len(registros)}")
+        print(f"Ignoradas (#N/A) : {ignoradas}")
 
     except Exception as e:
 
@@ -75,7 +90,6 @@ def main():
             mensagem=str(e)
         )
 
-        print(f"❌ Erro: {e}")
         raise
 
 
