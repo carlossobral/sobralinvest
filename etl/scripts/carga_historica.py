@@ -1,5 +1,4 @@
 from datetime import datetime, UTC
-
 import sys
 
 import yfinance as yf
@@ -35,6 +34,10 @@ def carregar_ticker(ticker: str):
         print(f"Sem histórico para {ticker}")
         return 0
 
+    # Corrige retorno MultiIndex das versões novas do yfinance
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+        df.columns = df.columns.get_level_values(0)
+
     registros = []
 
     for data, row in df.iterrows():
@@ -44,32 +47,24 @@ def carregar_ticker(ticker: str):
                 "ticker": ticker,
                 "data": data.strftime("%Y-%m-%d"),
                 "abertura": (
-                    None
-                    if row["Open"] != row["Open"]
-                    else float(row["Open"])
+                    None if row["Open"] is None else float(row["Open"])
                 ),
                 "maxima": (
-                    None
-                    if row["High"] != row["High"]
-                    else float(row["High"])
+                    None if row["High"] is None else float(row["High"])
                 ),
                 "minima": (
-                    None
-                    if row["Low"] != row["Low"]
-                    else float(row["Low"])
+                    None if row["Low"] is None else float(row["Low"])
                 ),
                 "fechamento": (
-                    None
-                    if row["Close"] != row["Close"]
-                    else float(row["Close"])
+                    None if row["Close"] is None else float(row["Close"])
                 ),
                 "volume": (
-                    0
-                    if row["Volume"] != row["Volume"]
-                    else int(row["Volume"])
+                    0 if row["Volume"] is None else int(row["Volume"])
                 ),
             }
         )
+
+    print(f"Registros encontrados: {len(registros)}")
 
     lote = 500
 
@@ -79,14 +74,12 @@ def carregar_ticker(ticker: str):
             supabase.table("cotacoes_diarias")
             .upsert(
                 registros[i:i + lote],
-                on_conflict="ticker,data"
+                on_conflict="ticker,data",
             )
             .execute()
         )
 
-    print(
-        f"{ticker}: {len(registros)} registros gravados"
-    )
+    print(f"{ticker}: {len(registros)} registros gravados")
 
     return len(registros)
 
@@ -110,10 +103,11 @@ def main():
         registrar_carga(
             status="SUCESSO",
             registros=total,
-            mensagem=f"{ticker}: {total} registros"
+            mensagem=f"{ticker}: {total} registros",
         )
 
-        print("\n========== FINAL ==========")
+        print()
+        print("========== FINAL ==========")
         print(f"Ticker    : {ticker}")
         print(f"Registros : {total}")
 
@@ -122,7 +116,7 @@ def main():
         registrar_carga(
             status="ERRO",
             registros=0,
-            mensagem=str(e)
+            mensagem=str(e),
         )
 
         raise
