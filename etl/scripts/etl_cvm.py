@@ -84,14 +84,18 @@ def tratar_df(df):
         for c in existentes
     ]
 
-if "dt_referencia" in df.columns:
-    df["dt_referencia"] = (
-        pd.to_datetime(
-            df["dt_referencia"],
-            errors="coerce"
+    if "dt_referencia" in df.columns:
+        df["dt_referencia"] = (
+            pd.to_datetime(
+                df["dt_referencia"],
+                errors="coerce"
+            )
+            .dt.strftime("%Y-%m-%d")
         )
-        .dt.strftime("%Y-%m-%d")
-    )
+
+    df = df.fillna("")
+
+    return df
 
 
 def processar_zip(ano):
