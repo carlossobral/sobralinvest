@@ -18,9 +18,22 @@ def registrar_carga(status: str, registros: int, mensagem: str):
     ).execute()
 
 
+def ticker_ja_carregado(ticker: str) -> bool:
+
+    resultado = (
+        supabase.table("cotacoes_diarias")
+        .select("id", count="exact")
+        .eq("ticker", ticker)
+        .limit(1)
+        .execute()
+    )
+
+    return (resultado.count or 0) > 0
+
+
 def carregar_ticker(ticker: str):
 
-    print(f"\nBaixando histórico: {ticker}")
+    print(f"Baixando histórico: {ticker}")
 
     df = yf.download(
         f"{ticker}.SA",
@@ -31,10 +44,9 @@ def carregar_ticker(ticker: str):
     )
 
     if df.empty:
-        print(f"Sem histórico para {ticker}")
+        print(f"Sem histórico: {ticker}")
         return 0
 
-    # Corrige retorno MultiIndex das versões novas do yfinance
     if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
         df.columns = df.columns.get_level_values(0)
 
@@ -46,25 +58,13 @@ def carregar_ticker(ticker: str):
             {
                 "ticker": ticker,
                 "data": data.strftime("%Y-%m-%d"),
-                "abertura": (
-                    None if row["Open"] is None else float(row["Open"])
-                ),
-                "maxima": (
-                    None if row["High"] is None else float(row["High"])
-                ),
-                "minima": (
-                    None if row["Low"] is None else float(row["Low"])
-                ),
-                "fechamento": (
-                    None if row["Close"] is None else float(row["Close"])
-                ),
-                "volume": (
-                    0 if row["Volume"] is None else int(row["Volume"])
-                ),
+                "abertura": float(row["Open"]) if row["Open"] == row["Open"] else None,
+                "maxima": float(row["High"]) if row["High"] == row["High"] else None,
+                "minima": float(row["Low"]) if row["Low"] == row["Low"] else None,
+                "fechamento": float(row["Close"]) if row["Close"] == row["Close"] else None,
+                "volume": int(row["Volume"]) if row["Volume"] == row["Volume"] else 0,
             }
         )
-
-    print(f"Registros encontrados: {len(registros)}")
 
     lote = 500
 
@@ -79,37 +79,80 @@ def carregar_ticker(ticker: str):
             .execute()
         )
 
-    print(f"{ticker}: {len(registros)} registros gravados")
+    print(f"{ticker}: {len(registros)} registros")
 
     return len(registros)
 
 
 def main():
 
-    if len(sys.argv) < 2:
-
-        print(
-            "Uso: uv run python -m etl.scripts.carga_historica PETR4"
-        )
-
-        return
-
-    ticker = sys.argv[1].upper()
+    total_registros = 0
+    processados = 0
+    pulados = 0
 
     try:
 
-        total = carregar_ticker(ticker)
+        # MODO 1 -> TICKER INFORMADO
+        if len(sys.argv) > 1:
+
+            ticker = sys.argv[1].upper()
+
+            total = carregar_ticker(ticker)
+
+            print()
+            print("========== FINAL ==========")
+            print(f"Ticker    : {ticker}")
+            print(f"Registros : {total}")
+
+            return
+
+        # MODO 2 -> TODOS OS TICKERS DA TABELA EMPRESAS
+
+        empresas = (
+            supabase.table("empresas")
+            .select("ticker")
+            .order("ticker")
+            .execute()
+            .data
+        )
+
+        print(f"Empresas encontradas: {len(empresas)}")
+        print()
+
+        for i, empresa in enumerate(empresas, start=1):
+
+            ticker = empresa["ticker"]
+
+            print(f"[{i}/{len(empresas)}] {ticker}")
+
+            try:
+
+                if ticker_ja_carregado(ticker):
+
+                    pulados += 1
+                    print("Já possui histórico")
+                    continue
+
+                total = carregar_ticker(ticker)
+
+                total_registros += total
+                processados += 1
+
+            except Exception as e:
+
+                print(f"Erro em {ticker}: {e}")
 
         registrar_carga(
             status="SUCESSO",
-            registros=total,
-            mensagem=f"{ticker}: {total} registros",
+            registros=total_registros,
+            mensagem=f"{processados} tickers carregados",
         )
 
         print()
         print("========== FINAL ==========")
-        print(f"Ticker    : {ticker}")
-        print(f"Registros : {total}")
+        print(f"Tickers carregados : {processados}")
+        print(f"Tickers pulados    : {pulados}")
+        print(f"Registros gravados : {total_registros}")
 
     except Exception as e:
 
