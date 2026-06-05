@@ -5,6 +5,9 @@ import httpx
 from etl.database.supabase_client import supabase
 
 
+URL = "https://mfinance.com.br/api/v1/stocks/dividends"
+
+
 def registrar_carga(status: str, registros: int, mensagem: str):
     supabase.table("etl_cargas").insert(
         {
@@ -20,6 +23,8 @@ def registrar_carga(status: str, registros: int, mensagem: str):
 def main():
 
     total_dividendos = 0
+    total_empresas = 0
+    total_erros = 0
 
     try:
 
@@ -41,12 +46,14 @@ def main():
             try:
 
                 response = httpx.get(
-                    f"https://mfinance.com.br/api/v1/stocks/dividends/{ticker}",
+                    f"{URL}/{ticker}",
                     timeout=30,
                 )
 
-                if response.status_code != 200:
+                if response.status_code == 404:
                     continue
+
+                response.raise_for_status()
 
                 dados = response.json()
 
@@ -59,47 +66,75 @@ def main():
 
                 for item in dividendos:
 
+                    if not item:
+                        continue
+
+                    data = item.get("date")
+                    tipo = item.get("type")
+                    valor = item.get("value")
+
+                    if (
+                        data is None
+                        or tipo is None
+                        or valor is None
+                    ):
+                        continue
+
                     chave = (
                         ticker,
-                        item["date"][:10],
-                        item["type"],
-                        float(item["value"]),
+                        data[:10],
+                        tipo,
+                        float(valor),
                     )
 
                     registros_unicos[chave] = {
                         "ticker": ticker,
-                        "data_pagamento": item["date"][:10],
-                        "tipo": item["type"],
-                        "valor": item["value"],
+                        "data_pagamento": data[:10],
+                        "tipo": tipo,
+                        "valor": valor,
                     }
 
                 registros = list(registros_unicos.values())
 
-                if registros:
+                if not registros:
+                    continue
 
-                    (
-                        supabase.table("dividendos")
-                        .upsert(
-                            registros,
-                            on_conflict="ticker,data_pagamento,tipo,valor"
-                        )
-                        .execute()
+                (
+                    supabase.table("dividendos")
+                    .upsert(
+                        registros,
+                        on_conflict="ticker,data_pagamento,tipo,valor"
                     )
+                    .execute()
+                )
 
-                    total_dividendos += len(registros)
+                total_dividendos += len(registros)
+                total_empresas += 1
 
             except Exception as e:
 
-                print(f"Erro em {ticker}: {e}")
+                total_erros += 1
+
+                print(
+                    f"Erro em {ticker}: "
+                    f"{type(e).__name__}: {e}"
+                )
 
         registrar_carga(
             status="SUCESSO",
             registros=total_dividendos,
-            mensagem=f"{total_dividendos} dividendos carregados",
+            mensagem=(
+                f"{total_dividendos} dividendos "
+                f"carregados em {total_empresas} empresas"
+            ),
         )
 
-        print("\n========== FINAL ==========")
-        print(f"Dividendos carregados: {total_dividendos}")
+        print()
+        print("========== FINAL ==========")
+        print(f"Empresas processadas : {len(empresas)}")
+        print(f"Empresas com dados   : {total_empresas}")
+        print(f"Dividendos gravados  : {total_dividendos}")
+        print(f"Erros                : {total_erros}")
 
     except Exception as e:
 
