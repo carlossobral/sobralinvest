@@ -1,4 +1,4 @@
-from datetime import datetime, UTC
+from datetime import datetime, UTC, date
 
 import httpx
 
@@ -32,9 +32,12 @@ def main():
 
         stocks = dados.get("stocks", [])
 
-        registros = []
+        empresas = []
+        cotacoes = []
 
         ignoradas = 0
+
+        hoje = date.today().isoformat()
 
         for item in stocks:
 
@@ -49,9 +52,11 @@ def main():
                 ignoradas += 1
                 continue
 
-            registros.append(
+            ticker = item.get("symbol")
+
+            empresas.append(
                 {
-                    "ticker": item.get("symbol"),
+                    "ticker": ticker,
                     "nome": nome,
                     "setor": item.get("sector"),
                     "subsetor": item.get("subSector"),
@@ -60,26 +65,54 @@ def main():
                 }
             )
 
-        if registros:
+            cotacoes.append(
+                {
+                    "ticker": ticker,
+                    "data": hoje,
+                    "abertura": item.get("priceOpen"),
+                    "maxima": item.get("high"),
+                    "minima": item.get("low"),
+                    "fechamento": item.get("lastPrice"),
+                    "volume": item.get("volume"),
+                }
+            )
+
+        if empresas:
 
             (
                 supabase.table("empresas")
                 .upsert(
-                    registros,
+                    empresas,
                     on_conflict="ticker"
+                )
+                .execute()
+            )
+
+        if cotacoes:
+
+            (
+                supabase.table("cotacoes_diarias")
+                .upsert(
+                    cotacoes,
+                    on_conflict="ticker,data"
                 )
                 .execute()
             )
 
         registrar_carga(
             status="SUCESSO",
-            registros=len(registros),
-            mensagem=f"{len(registros)} empresas carregadas. {ignoradas} ignoradas (#N/A)"
+            registros=len(empresas),
+            mensagem=(
+                f"{len(empresas)} empresas carregadas. "
+                f"{len(cotacoes)} cotações carregadas. "
+                f"{ignoradas} ignoradas (#N/A)"
+            )
         )
 
         print()
         print("========== FINAL ==========")
-        print(f"Empresas válidas : {len(registros)}")
+        print(f"Empresas válidas : {len(empresas)}")
+        print(f"Cotações salvas  : {len(cotacoes)}")
         print(f"Ignoradas (#N/A) : {ignoradas}")
 
     except Exception as e:
