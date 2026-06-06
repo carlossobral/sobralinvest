@@ -1,4 +1,3 @@
-from datetime import datetime, UTC
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -8,189 +7,301 @@ import pandas as pd
 from etl.database.supabase_client import supabase
 
 
-ANO_INICIAL = 2010
-ANO_FINAL = datetime.now().year
+ANOS = [2024]
 
 
 BASE_URL = (
-    "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS"
+    "https://dados.cvm.gov.br/dados/"
+    "CIA_ABERTA/DOC/ITR/DADOS"
 )
 
 
-def registrar_carga(status: str, registros: int, mensagem: str):
-    supabase.table("etl_cargas").insert(
-        {
-            "processo": "etl_cvm",
-            "inicio": datetime.now(UTC).isoformat(),
-            "status": status,
-            "registros": registros,
-            "mensagem": mensagem,
-        }
-    ).execute()
+CONTA_RECEITA = "3.01"
+CONTA_LUCRO = "3.11"
+
+CONTA_ATIVO_TOTAL = "1"
+CONTA_ATIVO_CIRC = "1.01"
+
+CONTA_PASSIVO_TOTAL = "2"
+CONTA_PASSIVO_CIRC = "2.01"
+
+CONTA_PL = "2.03"
 
 
-def salvar_dataframe(df, tabela):
+def baixar_zip(ano: int):
 
-    if df.empty:
-        return 0
-
-    registros = df.to_dict(orient="records")
-
-    lote = 1000
-
-    total = 0
-
-    for i in range(0, len(registros), lote):
-
-        chunk = registros[i:i+lote]
-
-        (
-            supabase
-            .table(tabela)
-            .insert(chunk)
-            .execute()
-        )
-
-        total += len(chunk)
-
-    return total
-
-
-def tratar_df(df):
-
-    colunas = {
-        "CNPJ_CIA": "cnpj_cia",
-        "CD_CVM": "cd_cvm",
-        "DENOM_CIA": "empresa",
-        "DT_REFER": "dt_referencia",
-        "VERSAO": "versao",
-        "GRUPO_DFP": "grupo_dfp",
-        "CD_CONTA": "codigo_conta",
-        "DS_CONTA": "descricao_conta",
-        "VL_CONTA": "valor",
-    }
-
-    existentes = [
-        c
-        for c in colunas
-        if c in df.columns
-    ]
-
-    df = df[existentes].copy()
-
-    df.columns = [
-        colunas[c]
-        for c in existentes
-    ]
-
-    if "dt_referencia" in df.columns:
-        df["dt_referencia"] = (
-            pd.to_datetime(
-                df["dt_referencia"],
-                errors="coerce"
-            )
-            .dt.strftime("%Y-%m-%d")
-        )
-
-    df = df.fillna("")
-
-    return df
-
-
-def processar_zip(ano):
-
-    url = f"{BASE_URL}/dfp_cia_aberta_{ano}.zip"
-
-    print()
-    print(f"Baixando {ano}")
+    url = f"{BASE_URL}/itr_cia_aberta_{ano}.zip"
 
     response = httpx.get(
         url,
-        timeout=300
+        timeout=300,
+        follow_redirects=True,
     )
 
-    if response.status_code != 200:
-        print("Arquivo não encontrado")
-        return 0
+    response.raise_for_status()
+
+    return ZipFile(BytesIO(response.content))
+
+
+def carregar_csv(zip_file, nome):
+
+    with zip_file.open(nome) as f:
+
+        return pd.read_csv(
+            f,
+            sep=";",
+            encoding="latin1",
+            low_memory=False,
+        )
+
+
+def normalizar_nome(nome):
+
+    if pd.isna(nome):
+        return ""
+
+    return (
+        str(nome)
+        .upper()
+        .strip()
+    )
+
+
+def carregar_empresas():
+
+    resultado = (
+        supabase
+        .table("empresas")
+        .select("ticker,nome")
+        .execute()
+    )
+
+    mapa = {}
+
+    for item in resultado.data:
+
+        nome = normalizar_nome(
+            item["nome"]
+        )
+
+        mapa[nome] = item["ticker"]
+
+    return mapa
+
+
+def obter_valor(df, conta):
+
+    linha = df[
+        df["CD_CONTA"] == conta
+    ]
+
+    if linha.empty:
+        return None
+
+    try:
+        return float(
+            linha.iloc[0]["VL_CONTA"]
+        )
+
+    except Exception:
+        return None
+
+
+def processar_empresa(
+    ticker,
+    ano,
+    trimestre,
+    dre_empresa,
+    bpa_empresa,
+    bpp_empresa,
+):
+
+    receita = obter_valor(
+        dre_empresa,
+        CONTA_RECEITA,
+    )
+
+    lucro = obter_valor(
+        dre_empresa,
+        CONTA_LUCRO,
+    )
+
+    ativo_total = obter_valor(
+        bpa_empresa,
+        CONTA_ATIVO_TOTAL,
+    )
+
+    ativo_circ = obter_valor(
+        bpa_empresa,
+        CONTA_ATIVO_CIRC,
+    )
+
+    passivo_total = obter_valor(
+        bpp_empresa,
+        CONTA_PASSIVO_TOTAL,
+    )
+
+    passivo_circ = obter_valor(
+        bpp_empresa,
+        CONTA_PASSIVO_CIRC,
+    )
+
+    pl = obter_valor(
+        bpp_empresa,
+        CONTA_PL,
+    )
+
+    registro = {
+
+        "ticker": ticker,
+
+        "ano": ano,
+
+        "trimestre": trimestre,
+
+        "receita_liquida": receita,
+
+        "lucro_liquido": lucro,
+
+        "ativo_total": ativo_total,
+
+        "ativo_circulante": ativo_circ,
+
+        "passivo_total": passivo_total,
+
+        "passivo_circulante": passivo_circ,
+
+        "patrimonio_liquido": pl,
+    }
+
+    (
+        supabase
+        .table(
+            "fundamentos_trimestrais"
+        )
+        .upsert(
+            registro,
+            on_conflict=(
+                "ticker,ano,trimestre"
+            )
+        )
+        .execute()
+    )
+
+
+def processar_ano(ano):
+
+    print()
+    print(f"Baixando ITR {ano}")
+
+    zip_file = baixar_zip(ano)
+
+    dre = carregar_csv(
+        zip_file,
+        f"itr_cia_aberta_DRE_con_{ano}.csv"
+    )
+
+    bpa = carregar_csv(
+        zip_file,
+        f"itr_cia_aberta_BPA_con_{ano}.csv"
+    )
+
+    bpp = carregar_csv(
+        zip_file,
+        f"itr_cia_aberta_BPP_con_{ano}.csv"
+    )
+
+    empresas = carregar_empresas()
 
     total = 0
 
-    with ZipFile(BytesIO(response.content)) as z:
+    nomes_cvm = (
+        dre["DENOM_CIA"]
+        .dropna()
+        .unique()
+    )
 
-        arquivos = z.namelist()
+    for nome_cia in nomes_cvm:
 
-        for nome in arquivos:
+        ticker = empresas.get(
+            normalizar_nome(
+                nome_cia
+            )
+        )
+
+        if not ticker:
+            continue
+
+        dre_empresa = dre[
+            dre["DENOM_CIA"]
+            == nome_cia
+        ]
+
+        bpa_empresa = bpa[
+            bpa["DENOM_CIA"]
+            == nome_cia
+        ]
+
+        bpp_empresa = bpp[
+            bpp["DENOM_CIA"]
+            == nome_cia
+        ]
+
+        datas = (
+            dre_empresa["DT_REFER"]
+            .dropna()
+            .unique()
+        )
+
+        for data_ref in datas:
 
             try:
 
-                if "DRE_con" in nome:
+                data_ref = pd.to_datetime(
+                    data_ref
+                )
 
-                    print(f"DRE: {nome}")
+                trimestre = (
+                    (data_ref.month - 1)
+                    // 3
+                ) + 1
 
-                    df = pd.read_csv(
-                        z.open(nome),
-                        sep=";",
-                        decimal=",",
-                        encoding="latin1"
+                dre_trim = dre_empresa[
+                    dre_empresa["DT_REFER"]
+                    == str(
+                        data_ref.date()
                     )
+                ]
 
-                    total += salvar_dataframe(
-                        tratar_df(df),
-                        "cvm_dre"
+                bpa_trim = bpa_empresa[
+                    bpa_empresa["DT_REFER"]
+                    == str(
+                        data_ref.date()
                     )
+                ]
 
-                elif "BPA_con" in nome:
-
-                    print(f"BPA: {nome}")
-
-                    df = pd.read_csv(
-                        z.open(nome),
-                        sep=";",
-                        decimal=",",
-                        encoding="latin1"
+                bpp_trim = bpp_empresa[
+                    bpp_empresa["DT_REFER"]
+                    == str(
+                        data_ref.date()
                     )
+                ]
 
-                    total += salvar_dataframe(
-                        tratar_df(df),
-                        "cvm_bpa"
-                    )
+                processar_empresa(
+                    ticker=ticker,
+                    ano=ano,
+                    trimestre=trimestre,
+                    dre_empresa=dre_trim,
+                    bpa_empresa=bpa_trim,
+                    bpp_empresa=bpp_trim,
+                )
 
-                elif "BPP_con" in nome:
-
-                    print(f"BPP: {nome}")
-
-                    df = pd.read_csv(
-                        z.open(nome),
-                        sep=";",
-                        decimal=",",
-                        encoding="latin1"
-                    )
-
-                    total += salvar_dataframe(
-                        tratar_df(df),
-                        "cvm_bpp"
-                    )
-
-                elif "DFC_MI_con" in nome:
-
-                    print(f"DFC: {nome}")
-
-                    df = pd.read_csv(
-                        z.open(nome),
-                        sep=";",
-                        decimal=",",
-                        encoding="latin1"
-                    )
-
-                    total += salvar_dataframe(
-                        tratar_df(df),
-                        "cvm_dfc"
-                    )
+                total += 1
 
             except Exception as e:
 
                 print(
-                    f"Erro arquivo {nome}: {e}"
+                    f"{ticker}: {e}"
                 )
 
     return total
@@ -200,34 +311,20 @@ def main():
 
     total = 0
 
-    try:
+    for ano in ANOS:
 
-        for ano in range(
-            ANO_INICIAL,
-            ANO_FINAL + 1
-        ):
-
-            total += processar_zip(ano)
-
-        registrar_carga(
-            "SUCESSO",
-            total,
-            f"{total} registros CVM carregados"
+        total += processar_ano(
+            ano
         )
 
-        print()
-        print("========== FINAL ==========")
-        print(f"Registros: {total}")
+    print()
+    print(
+        "========== FINAL =========="
+    )
 
-    except Exception as e:
-
-        registrar_carga(
-            "ERRO",
-            0,
-            str(e)
-        )
-
-        raise
+    print(
+        f"Fundamentos: {total}"
+    )
 
 
 if __name__ == "__main__":
