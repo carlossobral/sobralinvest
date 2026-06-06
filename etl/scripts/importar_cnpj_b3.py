@@ -1,7 +1,7 @@
 from pathlib import Path
 import pandas as pd
 
-from etl.config.database import supabase
+from etl.database.supabase_client import supabase
 
 
 ARQUIVO = Path("Pasta1.xlsx")
