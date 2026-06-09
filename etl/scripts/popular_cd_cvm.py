@@ -1,4 +1,5 @@
 import pandas as pd
+import re
 from pathlib import Path
 from etl.database.supabase_client import supabase
 
@@ -23,12 +24,25 @@ def main():
         print(f"❌ Colunas não encontradas. Disponíveis: {df_xlsx.columns.tolist()}")
         return
         
-    df_xlsx['ticker'] = df_xlsx[col_ticker].astype(str).str.strip().str.upper()
-    df_xlsx['cnpj'] = df_xlsx[col_cnpj].apply(normalizar_cnpj)
-    df_xlsx = df_xlsx.dropna(subset=['cnpj'])
+    print(f"Usando colunas: Ticker='{col_ticker}', CNPJ='{col_cnpj}'")
     
-    mapa_ticker_cnpj = dict(zip(df_xlsx['ticker'], df_xlsx['cnpj']))
-    print(f"✅ {len(mapa_ticker_cnpj)} CNPJs lidos do Excel.")
+    # Mapear Ticker -> CNPJ (tratando múltiplos tickers na mesma linha)
+    mapa_ticker_cnpj = {}
+    for _, row in df_xlsx.iterrows():
+        cnpj = normalizar_cnpj(row[col_cnpj])
+        if not cnpj:
+            continue
+            
+        codigos_raw = str(row[col_ticker])
+        # Split por vírgula, espaço, barra, ponto e vírgula
+        codigos = re.split(r'[,\s;/]+', codigos_raw)
+        
+        for cod in codigos:
+            ticker = cod.strip().upper()
+            if ticker and ticker != 'NAN' and len(ticker) >= 4:
+                mapa_ticker_cnpj[ticker] = cnpj
+                
+    print(f"✅ {len(mapa_ticker_cnpj)} tickers mapeados para CNPJs (após split).")
     
     print("\n2. Buscando tickers no Supabase...")
     empresas = supabase.table("empresas").select("ticker").execute().data
