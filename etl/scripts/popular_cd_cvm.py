@@ -60,9 +60,12 @@ def main():
                 
     print(f"✅ {len(mapa_ticker_cnpj)} tickers mapeados para CNPJs.")
     
-    print("\n2. Buscando tickers no Supabase...")
-    empresas_db = supabase.table("empresas").select("ticker").execute().data
+    print("\n2. Buscando empresas SEM CNPJ no Supabase...")
+    # BUSCAR EMPRESAS QUE NÃO TÊM CNPJ (IS NULL)
+    empresas_db = supabase.table("empresas").select("ticker").is_("cnpj", "null").execute().data
     tickers_db = {e['ticker'].upper() for e in empresas_db}
+    
+    print(f"Empresas sem CNPJ encontradas: {len(tickers_db)}")
     
     print("\n3. Atualizando coluna cnpj na tabela empresas...")
     registros_update = []
