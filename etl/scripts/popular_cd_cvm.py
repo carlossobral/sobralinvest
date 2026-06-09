@@ -1,36 +1,20 @@
 import pandas as pd
 import re
 from pathlib import Path
-from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-ARQUIVO_XLSX = Path("Pasta1.xlsx")
-
 def normalizar_cnpj(cnpj):
-    if pd.isna(cnpj):
-        return None
+    if pd.isna(cnpj): return None
     return "".join(filter(str.isdigit, str(cnpj))).zfill(14)
-
-def registrar_carga(status: str, registros: int, mensagem: str):
-    try:
-        supabase.table("etl_cargas").insert({
-            "processo": "popular_cd_cvm",
-            "inicio": datetime.now(UTC).isoformat(),
-            "status": status,
-            "registros": registros,
-            "mensagem": mensagem,
-        }).execute()
-    except Exception as e:
-        print(f"Erro ao registrar carga: {e}")
 
 def main():
     print("1. Lendo Pasta1.xlsx...")
-    if not ARQUIVO_XLSX.exists():
-        print(f"❌ Arquivo {ARQUIVO_XLSX} não encontrado na raiz.")
-        registrar_carga("ERRO", 0, f"Arquivo {ARQUIVO_XLSX} não encontrado")
+    xlsx_path = Path("Pasta1.xlsx")
+    if not xlsx_path.exists():
+        print("❌ Pasta1.xlsx não encontrado.")
         return
-
-    df_xlsx = pd.read_excel(ARQUIVO_XLSX)
+        
+    df_xlsx = pd.read_excel(xlsx_path)
     df_xlsx.columns = [str(c).strip().lower() for c in df_xlsx.columns]
     
     col_codigo = next((c for c in df_xlsx.columns if 'código' in c or 'codigo' in c), None)
@@ -38,49 +22,51 @@ def main():
     
     if not col_codigo or not col_cnpj:
         print(f"❌ Colunas não encontradas. Disponíveis: {df_xlsx.columns.tolist()}")
-        registrar_carga("ERRO", 0, f"Colunas não encontradas: {df_xlsx.columns.tolist()}")
         return
         
-    print(f"✅ Colunas identificadas: Código='{col_codigo}', CNPJ='{col_cnpj}'")
-    
+    # Mapeamento Ticker -> CNPJ (Split por vírgula, espaço, barra, newline)
     mapa_ticker_cnpj = {}
-    
     for _, row in df_xlsx.iterrows():
         cnpj = normalizar_cnpj(row[col_cnpj])
-        if not cnpj:
-            continue
-            
+        if not cnpj: continue
+        
         codigos_raw = str(row[col_codigo])
-        codigos = re.split(r'[,\s;/]+', codigos_raw)
+        codigos = re.split(r'[,\s;/\n]+', codigos_raw)
         
         for cod in codigos:
             ticker = cod.strip().upper()
             if ticker and ticker != 'NAN' and len(ticker) >= 4:
                 mapa_ticker_cnpj[ticker] = cnpj
-                
-    print(f"✅ {len(mapa_ticker_cnpj)} tickers mapeados para CNPJs.")
+
+    print(f"✅ {len(mapa_ticker_cnpj)} tickers mapeados diretamente.")
     
+    # Buscar empresas SEM CNPJ no Supabase
     print("\n2. Buscando empresas SEM CNPJ no Supabase...")
-    # BUSCAR EMPRESAS QUE NÃO TÊM CNPJ (IS NULL)
     empresas_db = supabase.table("empresas").select("ticker").is_("cnpj", "null").execute().data
-    tickers_db = {e['ticker'].upper() for e in empresas_db}
+    tickers_faltantes = [e['ticker'].upper() for e in empresas_db]
+    print(f"Empresas sem CNPJ: {len(tickers_faltantes)}")
     
-    print(f"Empresas sem CNPJ encontradas: {len(tickers_db)}")
-    
-    print("\n3. Atualizando coluna cnpj na tabela empresas...")
     registros_update = []
-    for ticker in tickers_db:
+    
+    for ticker in tickers_faltantes:
+        # 1. Tentativa direta
         if ticker in mapa_ticker_cnpj:
-            registros_update.append({
-                "ticker": ticker,
-                "cnpj": mapa_ticker_cnpj[ticker]
-            })
+            registros_update.append({"ticker": ticker, "cnpj": mapa_ticker_cnpj[ticker]})
+        else:
+            # 2. Solução 2: Fallback por Ticker Raiz (4 primeiros caracteres)
+            raiz = ticker[:4]
+            cnpj_encontrado = None
+            for t_map, cnpj in mapa_ticker_cnpj.items():
+                if t_map.startswith(raiz):
+                    cnpj_encontrado = cnpj
+                    break
             
-    print(f"✅ {len(registros_update)} empresas encontradas para atualizar.")
+            if cnpj_encontrado:
+                registros_update.append({"ticker": ticker, "cnpj": cnpj_encontrado})
+                
+    print(f"\n3. Atualizando {len(registros_update)} CNPJs via match direto + raiz...")
     
     if not registros_update:
-        print("Nenhum registro para atualizar.")
-        registrar_carga("SUCESSO", 0, "Nenhum CNPJ atualizado")
         return
         
     lote = 100
@@ -90,8 +76,7 @@ def main():
             on_conflict="ticker"
         ).execute()
         
-    print(f"\n🏆 CONCLUÍDO! {len(registros_update)} CNPJs atualizados no Supabase.")
-    registrar_carga("SUCESSO", len(registros_update), f"{len(registros_update)} CNPJs atualizados")
+    print(f"🏆 CONCLUÍDO! {len(registros_update)} CNPJs atualizados.")
 
 if __name__ == "__main__":
     main()
