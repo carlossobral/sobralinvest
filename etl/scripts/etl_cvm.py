@@ -205,38 +205,49 @@ def processar_ano(ano):
         f"itr_cia_aberta_BPP_con_{ano}.csv"
     )
 
+    dre["CD_CVM"] = pd.to_numeric(
+        dre["CD_CVM"],
+        errors="coerce"
+    )
+
+    bpa["CD_CVM"] = pd.to_numeric(
+        bpa["CD_CVM"],
+        errors="coerce"
+    )
+
+    bpp["CD_CVM"] = pd.to_numeric(
+        bpp["CD_CVM"],
+        errors="coerce"
+    )
+
     empresas = carregar_empresas()
 
     total = 0
 
-    nomes_cvm = (
+    codigos_cvm = (
         dre["CD_CVM"]
         .dropna()
+        .astype(int)
         .unique()
     )
 
     for cd_cvm in codigos_cvm:
 
-        ticker = empresas.get(
-            int(cd_cvm)
-        )
+        ticker = empresas.get(cd_cvm)
 
         if not ticker:
             continue
 
         dre_empresa = dre[
-            dre["CD_CVM"]
-            == cd_cvm
+            dre["CD_CVM"] == cd_cvm
         ]
 
         bpa_empresa = bpa[
-            bpa["CD_CVM"]
-            == cd_cvm
+            bpa["CD_CVM"] == cd_cvm
         ]
 
         bpp_empresa = bpp[
-            bpp["CD_CVM"]
-            == cd_cvm
+            bpp["CD_CVM"] == cd_cvm
         ]
 
         datas = (
@@ -249,34 +260,28 @@ def processar_ano(ano):
 
             try:
 
-                data_ref = pd.to_datetime(
+                data_ref_dt = pd.to_datetime(
                     data_ref
                 )
 
                 trimestre = (
-                    (data_ref.month - 1)
+                    (data_ref_dt.month - 1)
                     // 3
                 ) + 1
 
                 dre_trim = dre_empresa[
                     dre_empresa["DT_REFER"]
-                    == str(
-                        data_ref.date()
-                    )
+                    == data_ref
                 ]
 
                 bpa_trim = bpa_empresa[
                     bpa_empresa["DT_REFER"]
-                    == str(
-                        data_ref.date()
-                    )
+                    == data_ref
                 ]
 
                 bpp_trim = bpp_empresa[
                     bpp_empresa["DT_REFER"]
-                    == str(
-                        data_ref.date()
-                    )
+                    == data_ref
                 ]
 
                 processar_empresa(
