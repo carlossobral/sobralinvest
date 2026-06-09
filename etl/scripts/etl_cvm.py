@@ -72,22 +72,16 @@ def carregar_empresas():
     resultado = (
         supabase
         .table("empresas")
-        .select("ticker,nome")
+        .select("ticker,cd_cvm")
+        .not_.is_("cd_cvm", "null")
         .execute()
     )
 
-    mapa = {}
-
-    for item in resultado.data:
-
-        nome = normalizar_nome(
-            item["nome"]
-        )
-
-        mapa[nome] = item["ticker"]
-
-    return mapa
-
+    return {
+        int(x["cd_cvm"]): x["ticker"]
+        for x in resultado.data
+        if x["cd_cvm"]
+    }
 
 def obter_valor(df, conta):
 
@@ -216,35 +210,33 @@ def processar_ano(ano):
     total = 0
 
     nomes_cvm = (
-        dre["DENOM_CIA"]
+        dre["CD_CVM"]
         .dropna()
         .unique()
     )
 
-    for nome_cia in nomes_cvm:
+    for cd_cvm in codigos_cvm:
 
         ticker = empresas.get(
-            normalizar_nome(
-                nome_cia
-            )
+            int(cd_cvm)
         )
 
         if not ticker:
             continue
 
         dre_empresa = dre[
-            dre["DENOM_CIA"]
-            == nome_cia
+            dre["CD_CVM"]
+            == cd_cvm
         ]
 
         bpa_empresa = bpa[
-            bpa["DENOM_CIA"]
-            == nome_cia
+            bpa["CD_CVM"]
+            == cd_cvm
         ]
 
         bpp_empresa = bpp[
-            bpp["DENOM_CIA"]
-            == nome_cia
+            bpp["CD_CVM"]
+            == cd_cvm
         ]
 
         datas = (
