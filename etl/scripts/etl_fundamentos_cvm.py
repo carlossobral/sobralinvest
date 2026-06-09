@@ -20,11 +20,40 @@ MAPEAMENTO = {
     'divida_bruta': r'(?i)debentures|empr.stimos.e.financiamentos'
 }
 
-def processar_ano(ano, tipo_doc):
+def obter_mapa_cvm():
+    """Baixa o cadastro da CVM e cria um dicionário CD_CVM -> TICKER"""
+    print("🔄 Baixando cadastro oficial de companhias da CVM...")
+    url = "https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv"
+    try:
+        r = httpx.get(url, timeout=60, follow_redirects=True)
+        r.raise_for_status()
+        
+        # O arquivo da CVM usa encoding latin1 e separador ;
+        df = pd.read_csv(BytesIO(r.content), sep=';', encoding='latin1')
+        
+        # Filtra apenas empresas ativas e com código de negociação
+        df_ativas = df[df['SIT'] == 'ATIVO'].copy()
+        df_ativas = df_ativas.dropna(subset=['COD_NEG'])
+        
+        # Cria o dicionário: '1234' -> 'PETR4'
+        mapa = {}
+        for _, row in df_ativas.iterrows():
+            cod_neg = str(row['COD_NEG']).strip().upper()
+            cd_cvm = str(int(row['CD_CVM']))
+            mapa[cd_cvm] = cod_neg
+            
+        print(f"✅ Mapeamento CVM criado com {len(mapa)} empresas ativas.")
+        return mapa
+    except Exception as e:
+        print(f"❌ Erro ao baixar cadastro CVM: {e}")
+        return {}
+
+def processar_ano(ano, tipo_doc, mapa_cvm):
     url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/{tipo_doc.lower()}_cia_aberta_{ano}.zip"
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
-        if r.status_code != 200: return []
+        if r.status_code != 200: 
+            return []
         
         dados_finais = []
         with ZipFile(BytesIO(r.content)) as z:
@@ -46,12 +75,11 @@ def processar_ano(ano, tipo_doc):
         df_final = pd.concat(dados_finais)
         df_pivot = df_final.pivot_table(index=['CD_CVM', 'DT_REFER'], columns='conta', values='valor', aggfunc='sum').reset_index()
         
-        # Merge com tickers
-        empresas = pd.DataFrame(supabase.table("empresas").select("ticker, cd_cvm").execute().data)
-        mapa_cvm = {str(e['cd_cvm']): e['ticker'] for e in empresas if e.get('cd_cvm')}
-        
-        df_pivot['ticker'] = df_pivot['CD_CVM'].astype(str).map(mapa_cvm)
+        # Usa o mapa_cvm oficial vindo do cadastro da CVM
+        df_pivot['CD_CVM_STR'] = df_pivot['CD_CVM'].astype(str)
+        df_pivot['ticker'] = df_pivot['CD_CVM_STR'].map(mapa_cvm)
         df_pivot = df_pivot.dropna(subset=['ticker'])
+        
         df_pivot['ano'] = pd.to_datetime(df_pivot['DT_REFER']).dt.year
         df_pivot['data_referencia'] = df_pivot['DT_REFER']
         
@@ -68,29 +96,38 @@ def processar_ano(ano, tipo_doc):
         return df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None}).to_dict('records')
         
     except Exception as e:
-        print(f"Erro ano {ano} {tipo_doc}: {e}")
+        print(f"❌ Erro ano {ano} {tipo_doc}: {e}")
         return []
 
 def main():
     print("🔄 Iniciando carga leve de fundamentos (sem estourar o banco)...")
+    
+    # 1. Obter mapeamento oficial CVM (Resolve o problema do cd_cvm faltante)
+    mapa_cvm = obter_mapa_cvm()
+    if not mapa_cvm:
+        print("❌ Falha ao obter mapeamento CVM. Abortando.")
+        return
+
     total_registros = 0
     
     # Processa DFP (Anual) e ITR (Trimestral) dos últimos anos
     for ano in range(2018, datetime.now().year + 1):
-        print(f"Processando {ano}...")
+        print(f"\n📊 Processando {ano}...")
         
         # DFP
-        registros_dfp = processar_ano(ano, 'DFP')
+        registros_dfp = processar_ano(ano, 'DFP', mapa_cvm)
         if registros_dfp:
             supabase.table("fundamentos_anuais").upsert(registros_dfp, on_conflict="ticker,ano").execute()
             supabase.table("fundamentos_trimestrais").upsert(registros_dfp, on_conflict="ticker,ano,trimestre").execute()
             total_registros += len(registros_dfp)
+            print(f"  ✅ DFP {ano}: {len(registros_dfp)} registros")
             
         # ITR
-        registros_itr = processar_ano(ano, 'ITR')
+        registros_itr = processar_ano(ano, 'ITR', mapa_cvm)
         if registros_itr:
             supabase.table("fundamentos_trimestrais").upsert(registros_itr, on_conflict="ticker,ano,trimestre").execute()
             total_registros += len(registros_itr)
+            print(f"  ✅ ITR {ano}: {len(registros_itr)} registros")
 
     supabase.table("etl_cargas").insert({
         "processo": "etl_fundamentos_cvm",
@@ -100,7 +137,7 @@ def main():
         "mensagem": "Fundamentos agregados carregados"
     }).execute()
     
-    print(f"✅ CONCLUÍDO! {total_registros} registros de fundamentos salvos.")
+    print(f"\n🏆 CONCLUÍDO! {total_registros} registros de fundamentos salvos.")
 
 if __name__ == "__main__":
     main()
