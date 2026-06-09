@@ -7,8 +7,8 @@ from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
 # CONFIGURAÇÃO DE RANGE DINÂMICO
-ANO_INICIAL = 2022  # Altere apenas este valor se quiser expandir o histórico
-ANO_FINAL = datetime.now().year  # Automático: sempre pega o ano corrente
+ANO_INICIAL = 2022  
+ANO_FINAL = datetime.now().year  
 
 MAPEAMENTO = {
     'receita_liquida': r'(?i)receita.de.venda|receita.operacional.bruta',
@@ -25,7 +25,6 @@ MAPEAMENTO = {
 }
 
 def obter_dados_empresas():
-    """Busca Ticker, CD_CVM e Quantidade de Ações direto da tabela empresas"""
     print("🔄 Buscando dados da tabela empresas...")
     emp_data = supabase.table("empresas").select("ticker, cd_cvm, quantidade_acoes").not_.is_("cd_cvm", "null").execute().data
     
@@ -55,7 +54,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
             
             if not arquivos_consolidados:
-                print(f"  ⚠️ Nenhum arquivo consolidado encontrado no ZIP de {ano} {tipo_doc}")
+                print(f"  ️ Nenhum arquivo consolidado encontrado no ZIP de {ano} {tipo_doc}")
                 return []
 
             for nome in arquivos_consolidados:
@@ -120,6 +119,10 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'quantidade_acoes' in df_final.columns:
             df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
             
+        # CORREÇÃO CRÍTICA: Remover duplicatas para evitar erro de ON CONFLICT no Postgres
+        # Mantém a última versão encontrada (geralmente a mais recente/reformulada)
+        df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
+            
         return df_final.to_dict('records')
         
     except Exception as e:
@@ -135,12 +138,11 @@ def main():
         return
 
     total_registros = 0
-    # RANGE DINÂMICO: Do ano inicial configurado até o ano corrente
     anos = range(ANO_INICIAL, ANO_FINAL + 1)
     print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL}...")
     
     for ano in anos:
-        print(f"\n📊 Processando {ano}...")
+        print(f"\n Processando {ano}...")
         
         registros_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
         if registros_dfp:
