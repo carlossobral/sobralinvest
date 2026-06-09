@@ -7,7 +7,7 @@ from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
 # CONFIGURAÇÃO DE RANGE DINÂMICO
-ANO_INICIAL = 2022  
+ANO_INICIAL = 2016  
 ANO_FINAL = datetime.now().year  
 
 MAPEAMENTO = {
