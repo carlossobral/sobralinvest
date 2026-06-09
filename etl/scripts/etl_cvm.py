@@ -22,17 +22,17 @@ CONTA_PL = "2.03"
 
 def baixar_zip(ano: int):
 
-url = f"{BASE_URL}/itr_cia_aberta_{ano}.zip"
+    url = f"{BASE_URL}/itr_cia_aberta_{ano}.zip"
 
-response = httpx.get(
-    url,
-    timeout=300,
-    follow_redirects=True,
-)
+    response = httpx.get(
+        url,
+        timeout=300,
+        follow_redirects=True,
+    )
 
-response.raise_for_status()
+    response.raise_for_status()
 
-return ZipFile(BytesIO(response.content))
+    return ZipFile(BytesIO(response.content))
 
 def carregar_csv(zip_file, nome):
 
