@@ -24,6 +24,7 @@ CONTA_PL = "2.03"
 
 def baixar_zip(ano: int):
 
+```
 url = f"{BASE_URL}/itr_cia_aberta_{ano}.zip"
 
 response = httpx.get(
@@ -35,9 +36,11 @@ response = httpx.get(
 response.raise_for_status()
 
 return ZipFile(BytesIO(response.content))
+```
 
 def carregar_csv(zip_file, nome):
 
+```
 with zip_file.open(nome) as f:
 
     return pd.read_csv(
@@ -46,9 +49,11 @@ with zip_file.open(nome) as f:
         encoding="latin1",
         low_memory=False,
     )
+```
 
 def carregar_empresas():
 
+```
 resultado = (
     supabase
     .table("empresas")
@@ -62,9 +67,11 @@ return {
     for x in resultado.data
     if x["cd_cvm"]
 }
+```
 
 def obter_valor(df, conta):
 
+```
 linha = df[
     df["CD_CONTA"] == conta
 ]
@@ -81,6 +88,7 @@ try:
 except Exception:
 
     return None
+```
 
 def processar_empresa(
 ticker,
@@ -92,6 +100,7 @@ bpa_empresa,
 bpp_empresa,
 ):
 
+```
 receita = obter_valor(
     dre_empresa,
     CONTA_RECEITA,
@@ -172,9 +181,11 @@ registro = {
     )
     .execute()
 )
+```
 
 def processar_ano(ano):
 
+```
 print()
 print(f"Baixando ITR {ano}")
 
@@ -294,9 +305,11 @@ for cd_cvm in codigos_cvm:
             )
 
 return total
+```
 
 def main():
 
+```
 total = 0
 
 for ano in ANOS:
@@ -313,6 +326,7 @@ print(
 print(
     f"Fundamentos: {total}"
 )
+```
 
-if name == "main":
+if **name** == "**main**":
 main()
