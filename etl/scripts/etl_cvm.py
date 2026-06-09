@@ -1,9 +1,7 @@
 from io import BytesIO
 from zipfile import ZipFile
-
 import httpx
 import pandas as pd
-
 from etl.database.supabase_client import supabase
 
 ANOS = [2024]
