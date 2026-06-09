@@ -15,19 +15,12 @@ BASE_URL = (
 
 CONTA_RECEITA = "3.01"
 CONTA_LUCRO = "3.11"
-CONTA_LUCRO_BRUTO = "3.03"
-CONTA_EBIT = "3.05"
 
 CONTA_ATIVO_TOTAL = "1"
 CONTA_ATIVO_CIRC = "1.01"
 
 CONTA_PASSIVO_CIRC = "2.01"
 CONTA_PL = "2.03"
-
-CONTA_CAIXA = "1.01.01"
-
-CONTA_DIVIDA_CP = "2.01.04"
-CONTA_DIVIDA_LP = "2.02.01"
 
 def baixar_zip(ano: int):
 
@@ -104,16 +97,6 @@ receita = obter_valor(
     CONTA_RECEITA,
 )
 
-lucro_bruto = obter_valor(
-    dre_empresa,
-    CONTA_LUCRO_BRUTO,
-)
-
-ebit = obter_valor(
-    dre_empresa,
-    CONTA_EBIT,
-)
-
 lucro = obter_valor(
     dre_empresa,
     CONTA_LUCRO,
@@ -137,35 +120,6 @@ passivo_circ = obter_valor(
 pl = obter_valor(
     bpp_empresa,
     CONTA_PL,
-)
-
-caixa = obter_valor(
-    bpa_empresa,
-    CONTA_CAIXA,
-)
-
-divida_cp = (
-    obter_valor(
-        bpp_empresa,
-        CONTA_DIVIDA_CP,
-    )
-    or 0
-)
-
-divida_lp = (
-    obter_valor(
-        bpp_empresa,
-        CONTA_DIVIDA_LP,
-    )
-    or 0
-)
-
-divida_bruta = (
-    divida_cp + divida_lp
-)
-
-divida_liquida = (
-    divida_bruta - (caixa or 0)
 )
 
 passivo_total = None
@@ -192,12 +146,6 @@ registro = {
 
     "receita_liquida": receita,
 
-    "lucro_bruto": lucro_bruto,
-
-    "ebit": ebit,
-
-    "ebitda": ebit,
-
     "lucro_liquido": lucro,
 
     "ativo_total": ativo_total,
@@ -209,12 +157,6 @@ registro = {
     "passivo_circulante": passivo_circ,
 
     "patrimonio_liquido": pl,
-
-    "caixa": caixa,
-
-    "divida_bruta": divida_bruta,
-
-    "divida_liquida": divida_liquida,
 }
 
 (
@@ -372,5 +314,5 @@ print(
     f"Fundamentos: {total}"
 )
 
-if __name__ == "__main__":
-    main()
+if name == "main":
+main()
