@@ -34,7 +34,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
         if r.status_code != 200: 
-            print(f"  ⚠️ Arquivo {ano} {tipo_doc} não encontrado (Status {r.status_code})")
+            print(f"  ️ Arquivo {ano} {tipo_doc} não encontrado (Status {r.status_code})")
             return []
         
         dados_finais = []
@@ -42,7 +42,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
             
             if not arquivos_consolidados:
-                print(f"  ️ Nenhum arquivo consolidado encontrado no ZIP de {ano} {tipo_doc}")
+                print(f"  ⚠️ Nenhum arquivo consolidado encontrado no ZIP de {ano} {tipo_doc}")
                 return []
 
             for nome in arquivos_consolidados:
@@ -93,6 +93,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
                 'divida_liquida', 'quantidade_acoes']
         
         df_final = df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None})
+        
+        # CORREÇÃO CRÍTICA: Forçar tipos inteiros para evitar erro "1.0" no Postgres
+        if 'trimestre' in df_final.columns:
+            df_final['trimestre'] = df_final['trimestre'].astype(int)
+        if 'ano' in df_final.columns:
+            df_final['ano'] = df_final['ano'].astype(int)
+            
         return df_final.to_dict('records')
         
     except Exception as e:
@@ -113,18 +120,16 @@ def main():
     for ano in anos:
         print(f"\n📊 Processando {ano}...")
         
-        # Processa DFP (Anual)
+        # DFP
         registros_dfp = processar_ano(ano, 'DFP', mapa_tickers)
         if registros_dfp:
-            # CORREÇÃO: Remove a coluna 'trimestre' para a tabela anual
             registros_anuais = [{k: v for k, v in reg.items() if k != 'trimestre'} for reg in registros_dfp]
-            
             supabase.table("fundamentos_anuais").upsert(registros_anuais, on_conflict="ticker,ano").execute()
             supabase.table("fundamentos_trimestrais").upsert(registros_dfp, on_conflict="ticker,ano,trimestre").execute()
             total_registros += len(registros_dfp)
             print(f"  ✅ DFP {ano}: {len(registros_dfp)} registros")
             
-        # Processa ITR (Trimestral)
+        # ITR
         registros_itr = processar_ano(ano, 'ITR', mapa_tickers)
         if registros_itr:
             supabase.table("fundamentos_trimestrais").upsert(registros_itr, on_conflict="ticker,ano,trimestre").execute()
