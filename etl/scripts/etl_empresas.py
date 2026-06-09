@@ -91,7 +91,7 @@ def main():
         if cotacoes:
 
             (
-                supabase.table("cotacoes_diarias")
+                supabase.table("cotacoes")
                 .upsert(
                     cotacoes,
                     on_conflict="ticker,data"
