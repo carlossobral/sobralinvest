@@ -21,7 +21,7 @@ def registrar_carga(status: str, registros: int, mensagem: str):
 def ticker_ja_carregado(ticker: str) -> bool:
 
     resultado = (
-        supabase.table("cotacoes_diarias")
+        supabase.table("cotacoes")
         .select("id", count="exact")
         .eq("ticker", ticker)
         .limit(1)
@@ -71,7 +71,7 @@ def carregar_ticker(ticker: str):
     for i in range(0, len(registros), lote):
 
         (
-            supabase.table("cotacoes_diarias")
+            supabase.table("cotacoes")
             .upsert(
                 registros[i:i + lote],
                 on_conflict="ticker,data",
