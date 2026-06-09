@@ -6,19 +6,18 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
+# Regex ajustado baseado nos nomes reais da CVM
 MAPEAMENTO = {
-    'receita_liquida': r'(?i)receita.l.quida|receita.de.vendas',
-    'lucro_bruto': r'(?i)lucro.bruto|resultado.bruto',
-    'ebit': r'(?i)lucro.antes.do.resultado.financeiro|resultado.operacional|ebit',
-    'ebitda': r'(?i)ebitda|lucro.operacional.antes.da.deprecia',
-    'lucro_liquido': r'(?i)lucro.l.quido.do.exerc.cio|lucro.l.quido.atribu',
-    'ativo_total': r'(?i)total.do.ativo|ativo.total',
-    'ativo_circulante': r'(?i)ativo.circulante(?!.*n.o.circulante)',
-    'passivo_circulante': r'(?i)passivo.circulante(?!.*n.o.circulante)',
-    'patrimonio_liquido': r'(?i)patrim.nio.l.quido.consolidado|patrim.nio.l.quido',
-    'caixa': r'(?i)caixa.e.equivalentes|disponibilidades',
-    'divida_bruta': r'(?i)debentures|empr.stimos.e.financiamentos',
-    'quantidade_acoes': r'(?i)quantidade.de.a.oes|numero.de.a.oes'
+    'receita_liquida': r'(?i)receita.de.venda|receita.operacional.bruta|3\.01',
+    'lucro_bruto': r'(?i)resultado.bruto|lucro.bruto|3\.03',
+    'ebit': r'(?i)resultado.antes.do.resultado.financeiro|resultado.operacional|3\.05',
+    'lucro_liquido': r'(?i)consolidado.do.per.odo|lucro.l.quido.do.exerc.cio|3\.11(?!.*atribu)',
+    'ativo_total': r'(?i)total.do.ativo|1\.01',
+    'ativo_circulante': r'(?i)ativo.circulante(?!.*n.o.circulante)|1\.01',
+    'passivo_circulante': r'(?i)passivo.circulante(?!.*n.o.circulante)|2\.01',
+    'patrimonio_liquido': r'(?i)patrim.nio.l.quido.consolidado|patrim.nio.l.quido|2\.03',
+    'caixa': r'(?i)caixa.e.equivalentes|disponibilidades|1\.01\.01',
+    'divida_bruta': r'(?i)debentures|empr.stimos.e.financiamentos|2\.02'
 }
 
 def obter_mapa_tickers():
@@ -34,7 +33,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
         if r.status_code != 200: 
-            print(f"  ️ Arquivo {ano} {tipo_doc} não encontrado (Status {r.status_code})")
+            print(f"  ⚠️ Arquivo {ano} {tipo_doc} não encontrado (Status {r.status_code})")
             return []
         
         dados_finais = []
@@ -50,7 +49,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
                 for conta_padrao, regex in MAPEAMENTO.items():
-                    df_filtrado = df[df['DS_CONTA'].str.contains(regex, na=False, regex=True)]
+                    # Buscar por CD_CONTA ou DS_CONTA
+                    df_filtrado = df[
+                        df['CD_CONTA'].str.match(regex, na=False) | 
+                        df['DS_CONTA'].str.contains(regex, na=False, regex=True)
+                    ]
                     if not df_filtrado.empty:
                         agg = df_filtrado.groupby(['CD_CVM', 'DT_REFER'])['valor'].sum().reset_index()
                         agg['conta'] = conta_padrao
@@ -88,13 +91,12 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
         df_pivot['divida_liquida'] = df_pivot.get('divida_bruta', 0) - df_pivot.get('caixa', 0)
         
         cols = ['ticker', 'ano', 'trimestre', 'data_referencia', 'receita_liquida', 'lucro_bruto', 
-                'ebit', 'ebitda', 'lucro_liquido', 'ativo_total', 'ativo_circulante', 
+                'ebit', 'lucro_liquido', 'ativo_total', 'ativo_circulante', 
                 'passivo_circulante', 'patrimonio_liquido', 'caixa', 'divida_bruta', 
-                'divida_liquida', 'quantidade_acoes']
+                'divida_liquida']
         
         df_final = df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None})
         
-        # CORREÇÃO CRÍTICA: Forçar tipos inteiros para evitar erro "1.0" no Postgres
         if 'trimestre' in df_final.columns:
             df_final['trimestre'] = df_final['trimestre'].astype(int)
         if 'ano' in df_final.columns:
@@ -120,7 +122,6 @@ def main():
     for ano in anos:
         print(f"\n📊 Processando {ano}...")
         
-        # DFP
         registros_dfp = processar_ano(ano, 'DFP', mapa_tickers)
         if registros_dfp:
             registros_anuais = [{k: v for k, v in reg.items() if k != 'trimestre'} for reg in registros_dfp]
@@ -129,7 +130,6 @@ def main():
             total_registros += len(registros_dfp)
             print(f"  ✅ DFP {ano}: {len(registros_dfp)} registros")
             
-        # ITR
         registros_itr = processar_ano(ano, 'ITR', mapa_tickers)
         if registros_itr:
             supabase.table("fundamentos_trimestrais").upsert(registros_itr, on_conflict="ticker,ano,trimestre").execute()
