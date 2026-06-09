@@ -25,38 +25,30 @@ def obter_mapa_cvm():
     print("🔄 Baixando cadastro oficial de companhias da CVM...")
     url = "https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv"
     
-    # Headers para simular um navegador e evitar bloqueio 403 da CVM
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Accept": "text/csv,application/csv,*/*"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
     try:
         r = httpx.get(url, headers=headers, timeout=60, follow_redirects=True)
         
-        # Verifica se o retorno é realmente um CSV e não uma página de erro
-        if r.status_code != 200 or 'text/csv' not in r.headers.get('content-type', ''):
+        if r.status_code != 200:
             print(f"❌ Falha no download. Status: {r.status_code}")
-            print(f"Conteúdo retornado: {r.text[:300]}")
             return {}
-        
+            
+        # REMOVIDA a verificação de content-type que estava abortando o script
         df = pd.read_csv(BytesIO(r.content), sep=';', encoding='latin1')
         
-        # Diagnóstico: verifica se as colunas esperadas existem
+        # Validação das colunas obrigatórias
         if 'CD_CVM' not in df.columns or 'COD_NEG' not in df.columns:
-            print(f"❌ Colunas 'CD_CVM' ou 'COD_NEG' não encontradas.")
-            print(f"Colunas disponíveis no arquivo: {df.columns.tolist()[:10]}")
+            print(f"❌ Colunas essenciais não encontradas.")
+            print(f"Colunas lidas: {df.columns.tolist()[:15]}")
             return {}
-        
-        # Filtra apenas empresas ativas e com código de negociação
+            
         df_ativas = df[df['SIT'] == 'ATIVO'].copy()
         df_ativas = df_ativas.dropna(subset=['COD_NEG'])
         
-        # Cria o dicionário: '1234' -> 'PETR4'
         mapa = {}
         for _, row in df_ativas.iterrows():
             cod_neg = str(row['COD_NEG']).strip().upper()
-            # Trata casos onde CD_CVM pode vir com NaN ou formato estranho
             try:
                 cd_cvm = str(int(float(row['CD_CVM'])))
                 mapa[cd_cvm] = cod_neg
