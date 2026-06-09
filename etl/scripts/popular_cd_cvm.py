@@ -1,82 +1,55 @@
+from datetime import datetime, UTC
+from io import BytesIO
+import httpx
 import pandas as pd
-import re
-from pathlib import Path
 from etl.database.supabase_client import supabase
 
 def normalizar_cnpj(cnpj):
-    if pd.isna(cnpj): return None
+    if pd.isna(cnpj):
+        return None
     return "".join(filter(str.isdigit, str(cnpj))).zfill(14)
 
 def main():
-    print("1. Lendo Pasta1.xlsx...")
-    xlsx_path = Path("Pasta1.xlsx")
-    if not xlsx_path.exists():
-        print("❌ Pasta1.xlsx não encontrado.")
+    print("1. Baixando cadastro CVM (cad_cia_aberta.csv)...")
+    url = "https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv"
+    
+    try:
+        response = httpx.get(url, timeout=120, follow_redirects=True)
+        response.raise_for_status()
+        
+        df_cvm = pd.read_csv(BytesIO(response.content), sep=';', encoding='latin1')
+        df_cvm['cnpj_norm'] = df_cvm['CNPJ_CIA'].apply(normalizar_cnpj)
+        df_cvm = df_cvm.dropna(subset=['cnpj_norm', 'CD_CVM'])
+        
+        mapa_cnpj_cdcvm = dict(zip(df_cvm['cnpj_norm'], df_cvm['CD_CVM'].astype(int)))
+        print(f"✅ {len(mapa_cnpj_cdcvm)} CNPJs mapeados para CD_CVM")
+        
+    except Exception as e:
+        print(f"❌ Erro ao baixar CVM: {e}")
         return
-        
-    df_xlsx = pd.read_excel(xlsx_path)
-    df_xlsx.columns = [str(c).strip().lower() for c in df_xlsx.columns]
     
-    col_codigo = next((c for c in df_xlsx.columns if 'código' in c or 'codigo' in c), None)
-    col_cnpj = next((c for c in df_xlsx.columns if 'cnpj' in c), None)
-    
-    if not col_codigo or not col_cnpj:
-        print(f"❌ Colunas não encontradas. Disponíveis: {df_xlsx.columns.tolist()}")
-        return
-        
-    # Mapeamento Ticker -> CNPJ (Split por vírgula, espaço, barra, newline)
-    mapa_ticker_cnpj = {}
-    for _, row in df_xlsx.iterrows():
-        cnpj = normalizar_cnpj(row[col_cnpj])
-        if not cnpj: continue
-        
-        codigos_raw = str(row[col_codigo])
-        codigos = re.split(r'[,\s;/\n]+', codigos_raw)
-        
-        for cod in codigos:
-            ticker = cod.strip().upper()
-            if ticker and ticker != 'NAN' and len(ticker) >= 4:
-                mapa_ticker_cnpj[ticker] = cnpj
-
-    print(f"✅ {len(mapa_ticker_cnpj)} tickers mapeados diretamente.")
-    
-    # Buscar empresas SEM CNPJ no Supabase
-    print("\n2. Buscando empresas SEM CNPJ no Supabase...")
-    empresas_db = supabase.table("empresas").select("ticker").is_("cnpj", "null").execute().data
-    tickers_faltantes = [e['ticker'].upper() for e in empresas_db]
-    print(f"Empresas sem CNPJ: {len(tickers_faltantes)}")
+    print("\n2. Buscando empresas no Supabase...")
+    empresas = supabase.table("empresas").select("ticker, cnpj").execute().data
     
     registros_update = []
+    for emp in empresas:
+        cnpj_emp = normalizar_cnpj(emp.get('cnpj'))
+        if cnpj_emp and cnpj_emp in mapa_cnpj_cdcvm:
+            registros_update.append({
+                "ticker": emp['ticker'],
+                "cd_cvm": mapa_cnpj_cdcvm[cnpj_emp]
+            })
     
-    for ticker in tickers_faltantes:
-        # 1. Tentativa direta
-        if ticker in mapa_ticker_cnpj:
-            registros_update.append({"ticker": ticker, "cnpj": mapa_ticker_cnpj[ticker]})
-        else:
-            # 2. Solução 2: Fallback por Ticker Raiz (4 primeiros caracteres)
-            raiz = ticker[:4]
-            cnpj_encontrado = None
-            for t_map, cnpj in mapa_ticker_cnpj.items():
-                if t_map.startswith(raiz):
-                    cnpj_encontrado = cnpj
-                    break
-            
-            if cnpj_encontrado:
-                registros_update.append({"ticker": ticker, "cnpj": cnpj_encontrado})
-                
-    print(f"\n3. Atualizando {len(registros_update)} CNPJs via match direto + raiz...")
+    print(f"\n3. Atualizando {len(registros_update)} empresas com CD_CVM...")
     
-    if not registros_update:
-        return
-        
     lote = 100
     for i in range(0, len(registros_update), lote):
         supabase.table("empresas").upsert(
-            registros_update[i:i+lote], 
+            registros_update[i:i+lote],
             on_conflict="ticker"
         ).execute()
-        
-    print(f"🏆 CONCLUÍDO! {len(registros_update)} CNPJs atualizados.")
+    
+    print(f"\n🏆 CONCLUÍDO! {len(registros_update)} empresas tiveram o cd_cvm populado.")
 
 if __name__ == "__main__":
     main()
