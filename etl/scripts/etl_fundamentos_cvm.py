@@ -107,7 +107,7 @@ def main():
         return
 
     total_registros = 0
-    anos = range(2018, datetime.now().year + 1)
+    anos = range(2024, datetime.now().year + 1)
     
     for ano in anos:
         print(f"\n📊 Processando {ano}...")
