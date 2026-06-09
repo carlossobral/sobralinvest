@@ -6,18 +6,19 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-# Regex ajustado baseado nos nomes reais da CVM
+# Dicionário de Mapeamento Regex (Focado em nomes e códigos oficiais da CVM)
 MAPEAMENTO = {
-    'receita_liquida': r'(?i)receita.de.venda|receita.operacional.bruta|3\.01',
-    'lucro_bruto': r'(?i)resultado.bruto|lucro.bruto|3\.03',
-    'ebit': r'(?i)resultado.antes.do.resultado.financeiro|resultado.operacional|3\.05',
-    'lucro_liquido': r'(?i)consolidado.do.per.odo|lucro.l.quido.do.exerc.cio|3\.11(?!.*atribu)',
-    'ativo_total': r'(?i)total.do.ativo|1\.01',
-    'ativo_circulante': r'(?i)ativo.circulante(?!.*n.o.circulante)|1\.01',
-    'passivo_circulante': r'(?i)passivo.circulante(?!.*n.o.circulante)|2\.01',
-    'patrimonio_liquido': r'(?i)patrim.nio.l.quido.consolidado|patrim.nio.l.quido|2\.03',
-    'caixa': r'(?i)caixa.e.equivalentes|disponibilidades|1\.01\.01',
-    'divida_bruta': r'(?i)debentures|empr.stimos.e.financiamentos|2\.02'
+    'receita_liquida': r'(?i)receita.de.venda|receita.operacional.bruta',
+    'lucro_bruto': r'(?i)resultado.bruto|lucro.bruto',
+    'ebit': r'(?i)resultado.antes.do.resultado.financeiro|resultado.operacional',
+    'depreciacao_amortizacao': r'(?i)deprecia|amortiza',
+    'lucro_liquido': r'(?i)consolidado.do.per.odo|lucro.l.quido.do.exerc.cio',
+    'ativo_total': r'(?i)total.do.ativo|ativo.total',
+    'ativo_circulante': r'(?i)ativo.circulante(?!.*n.o.circulante)',
+    'passivo_circulante': r'(?i)passivo.circulante(?!.*n.o.circulante)',
+    'patrimonio_liquido': r'(?i)patrim.nio.l.quido.consolidado|patrim.nio.l.quido',
+    'caixa': r'(?i)caixa.e.equivalentes|disponibilidades',
+    'divida_bruta': r'(?i)debentures|empr.stimos.e.financiamentos'
 }
 
 def obter_mapa_tickers():
@@ -49,11 +50,8 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
                 for conta_padrao, regex in MAPEAMENTO.items():
-                    # Buscar por CD_CONTA ou DS_CONTA
-                    df_filtrado = df[
-                        df['CD_CONTA'].str.match(regex, na=False) | 
-                        df['DS_CONTA'].str.contains(regex, na=False, regex=True)
-                    ]
+                    # Busca por nome da conta (DS_CONTA)
+                    df_filtrado = df[df['DS_CONTA'].str.contains(regex, na=False, regex=True)]
                     if not df_filtrado.empty:
                         agg = df_filtrado.groupby(['CD_CVM', 'DT_REFER'])['valor'].sum().reset_index()
                         agg['conta'] = conta_padrao
@@ -70,6 +68,12 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
             aggfunc='sum'
         ).reset_index()
         
+        # NOVO: Calcular EBITDA (EBIT + Depreciação/Amortização)
+        if 'ebit' in df_pivot.columns and 'depreciacao_amortizacao' in df_pivot.columns:
+            df_pivot['ebitda'] = df_pivot['ebit'] + df_pivot['depreciacao_amortizacao']
+        elif 'ebit' in df_pivot.columns:
+            df_pivot['ebitda'] = df_pivot['ebit'] # Fallback se não achar depreciação
+            
         df_pivot['CD_CVM_STR'] = df_pivot['CD_CVM'].astype(str)
         df_pivot['ticker'] = df_pivot['CD_CVM_STR'].map(mapa_tickers)
         
@@ -90,8 +94,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
             
         df_pivot['divida_liquida'] = df_pivot.get('divida_bruta', 0) - df_pivot.get('caixa', 0)
         
+        # Colunas finais (sem quantidade_acoes, que virá da tabela empresas)
         cols = ['ticker', 'ano', 'trimestre', 'data_referencia', 'receita_liquida', 'lucro_bruto', 
-                'ebit', 'lucro_liquido', 'ativo_total', 'ativo_circulante', 
+                'ebit', 'ebitda', 'lucro_liquido', 'ativo_total', 'ativo_circulante', 
                 'passivo_circulante', 'patrimonio_liquido', 'caixa', 'divida_bruta', 
                 'divida_liquida']
         
@@ -109,7 +114,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
         return []
 
 def main():
-    print("🔄 Iniciando carga otimizada de fundamentos (Camada Silver)...")
+    print(" Iniciando carga otimizada de fundamentos (Camada Silver)...")
     mapa_tickers = obter_mapa_tickers()
     
     if not mapa_tickers:
@@ -120,7 +125,7 @@ def main():
     anos = range(2024, 2025)
     
     for ano in anos:
-        print(f"\n📊 Processando {ano}...")
+        print(f"\n Processando {ano}...")
         
         registros_dfp = processar_ano(ano, 'DFP', mapa_tickers)
         if registros_dfp:
@@ -136,7 +141,7 @@ def main():
             total_registros += len(registros_itr)
             print(f"  ✅ ITR {ano}: {len(registros_itr)} registros")
 
-    print(f"\n🏆 CONCLUÍDO! {total_registros} registros salvos.")
+    print(f"\n CONCLUÍDO! {total_registros} registros salvos.")
 
 if __name__ == "__main__":
     main()
