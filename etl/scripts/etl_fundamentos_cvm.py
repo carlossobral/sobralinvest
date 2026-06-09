@@ -6,7 +6,6 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-# Dicionário de Mapeamento Regex para as 12 contas essenciais
 MAPEAMENTO = {
     'receita_liquida': r'(?i)receita.l.quida|receita.de.vendas',
     'lucro_bruto': r'(?i)lucro.bruto|resultado.bruto',
@@ -23,7 +22,7 @@ MAPEAMENTO = {
 }
 
 def obter_mapa_tickers():
-    print(" Buscando mapeamento CD_CVM -> Ticker...")
+    print("🔄 Buscando mapeamento CD_CVM -> Ticker...")
     emp_data = supabase.table("empresas").select("ticker, cd_cvm").not_.is_("cd_cvm", "null").execute().data
     mapa = {str(int(e['cd_cvm'])): e['ticker'] for e in emp_data if e.get('cd_cvm')}
     print(f"✅ {len(mapa)} tickers mapeados.")
@@ -40,7 +39,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
         
         dados_finais = []
         with ZipFile(BytesIO(r.content)) as z:
-            # CORREÇÃO: Filtrar por '_con_' que é o padrão da CVM para Consolidado
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
             
             if not arquivos_consolidados:
@@ -72,9 +70,8 @@ def processar_ano(ano, tipo_doc, mapa_tickers):
         df_pivot['CD_CVM_STR'] = df_pivot['CD_CVM'].astype(str)
         df_pivot['ticker'] = df_pivot['CD_CVM_STR'].map(mapa_tickers)
         
-        # Debug: ver quantos tickers foram mapeados
         tickers_encontrados = df_pivot['ticker'].notna().sum()
-        print(f"   {tickers_encontrados} tickers mapeados com sucesso no {tipo_doc} {ano}")
+        print(f"   🔍 {tickers_encontrados} tickers mapeados com sucesso no {tipo_doc} {ano}")
         
         df_pivot = df_pivot.dropna(subset=['ticker'])
         
@@ -111,25 +108,30 @@ def main():
         return
 
     total_registros = 0
-    anos = range(2024, 2025) # Teste apenas com 2024
+    anos = range(2024, 2025)
     
     for ano in anos:
         print(f"\n📊 Processando {ano}...")
         
+        # Processa DFP (Anual)
         registros_dfp = processar_ano(ano, 'DFP', mapa_tickers)
         if registros_dfp:
-            supabase.table("fundamentos_anuais").upsert(registros_dfp, on_conflict="ticker,ano").execute()
+            # CORREÇÃO: Remove a coluna 'trimestre' para a tabela anual
+            registros_anuais = [{k: v for k, v in reg.items() if k != 'trimestre'} for reg in registros_dfp]
+            
+            supabase.table("fundamentos_anuais").upsert(registros_anuais, on_conflict="ticker,ano").execute()
             supabase.table("fundamentos_trimestrais").upsert(registros_dfp, on_conflict="ticker,ano,trimestre").execute()
             total_registros += len(registros_dfp)
             print(f"  ✅ DFP {ano}: {len(registros_dfp)} registros")
             
+        # Processa ITR (Trimestral)
         registros_itr = processar_ano(ano, 'ITR', mapa_tickers)
         if registros_itr:
             supabase.table("fundamentos_trimestrais").upsert(registros_itr, on_conflict="ticker,ano,trimestre").execute()
             total_registros += len(registros_itr)
             print(f"  ✅ ITR {ano}: {len(registros_itr)} registros")
 
-    print(f"\n CONCLUÍDO! {total_registros} registros salvos.")
+    print(f"\n🏆 CONCLUÍDO! {total_registros} registros salvos.")
 
 if __name__ == "__main__":
     main()
