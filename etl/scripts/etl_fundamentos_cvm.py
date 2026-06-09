@@ -6,6 +6,10 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
+# CONFIGURAÇÃO DE RANGE DINÂMICO
+ANO_INICIAL = 2022  # Altere apenas este valor se quiser expandir o histórico
+ANO_FINAL = datetime.now().year  # Automático: sempre pega o ano corrente
+
 MAPEAMENTO = {
     'receita_liquida': r'(?i)receita.de.venda|receita.operacional.bruta',
     'lucro_bruto': r'(?i)resultado.bruto|lucro.bruto',
@@ -32,7 +36,6 @@ def obter_dados_empresas():
         if e.get('cd_cvm'):
             cd_cvm_str = str(int(e['cd_cvm']))
             mapa_tickers[cd_cvm_str] = e['ticker']
-            # Converte para inteiro, tratando nulos
             mapa_acoes[cd_cvm_str] = int(e['quantidade_acoes']) if e.get('quantidade_acoes') else None
             
     print(f"✅ {len(mapa_tickers)} tickers e ações mapeados.")
@@ -44,6 +47,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
         if r.status_code != 200: 
+            print(f"  ⚠️ Arquivo {ano} {tipo_doc} não encontrado (Status {r.status_code})")
             return []
         
         dados_finais = []
@@ -51,6 +55,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
             
             if not arquivos_consolidados:
+                print(f"  ⚠️ Nenhum arquivo consolidado encontrado no ZIP de {ano} {tipo_doc}")
                 return []
 
             for nome in arquivos_consolidados:
@@ -75,7 +80,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             aggfunc='sum'
         ).reset_index()
         
-        # Calcular EBITDA
         if 'ebit' in df_pivot.columns and 'depreciacao_amortizacao' in df_pivot.columns:
             df_pivot['ebitda'] = df_pivot['ebit'] + df_pivot['depreciacao_amortizacao']
         elif 'ebit' in df_pivot.columns:
@@ -83,8 +87,10 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             
         df_pivot['CD_CVM_STR'] = df_pivot['CD_CVM'].astype(str)
         df_pivot['ticker'] = df_pivot['CD_CVM_STR'].map(mapa_tickers)
-        # NOVO: Injetar quantidade de ações
         df_pivot['quantidade_acoes'] = df_pivot['CD_CVM_STR'].map(mapa_acoes)
+        
+        tickers_encontrados = df_pivot['ticker'].notna().sum()
+        print(f"   🔍 {tickers_encontrados} tickers mapeados com sucesso no {tipo_doc} {ano}")
         
         df_pivot = df_pivot.dropna(subset=['ticker'])
         
@@ -112,7 +118,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'ano' in df_final.columns:
             df_final['ano'] = df_final['ano'].astype(int)
         if 'quantidade_acoes' in df_final.columns:
-            df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64') # Nullable integer
+            df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
             
         return df_final.to_dict('records')
         
@@ -121,15 +127,17 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         return []
 
 def main():
-    print(" Iniciando carga otimizada de fundamentos (Camada Silver)...")
+    print("🔄 Iniciando carga otimizada de fundamentos (Camada Silver)...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
     
     if not mapa_tickers:
-        print(" Nenhum ticker com CD_CVM encontrado. Abortando.")
+        print("❌ Nenhum ticker com CD_CVM encontrado. Abortando.")
         return
 
     total_registros = 0
-    anos = range(2024, 2025)
+    # RANGE DINÂMICO: Do ano inicial configurado até o ano corrente
+    anos = range(ANO_INICIAL, ANO_FINAL + 1)
+    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL}...")
     
     for ano in anos:
         print(f"\n📊 Processando {ano}...")
