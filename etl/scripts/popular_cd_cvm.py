@@ -18,7 +18,7 @@ def main():
     df_xlsx = pd.read_excel(xlsx_path)
     df_xlsx.columns = [str(c).strip().lower() for c in df_xlsx.columns]
     
-    col_ticker = next((c for c in df_xlsx.columns if c in ['ticker', 'codigo', 'papel', 'ativo']), None)
+    col_ticker = next((c for c in df_xlsx.columns if c in ['Empresa', 'código(s)', 'CNPJ', 'ativo']), None)
     col_cnpj = next((c for c in df_xlsx.columns if 'cnpj' in c), None)
     
     if not col_ticker or not col_cnpj:
