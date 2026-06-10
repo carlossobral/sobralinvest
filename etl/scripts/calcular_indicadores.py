@@ -3,10 +3,9 @@ import numpy as np
 from datetime import datetime, timedelta
 from etl.database.supabase_client import supabase
 
-TAXA_IMPOSTO = 0.34  # IRPJ + CSLL marginal
+TAXA_IMPOSTO = 0.34
 
 def buscar_fundamentos():
-    """Busca dados anuais consolidados (T4)"""
     print("🔄 Buscando fundamentos anuais (T4)...")
     data = supabase.table("fundamentos_trimestrais").select("*").eq("trimestre", 4).execute().data
     df = pd.DataFrame(data)
@@ -22,30 +21,35 @@ def buscar_fundamentos():
     return df
 
 def buscar_cotacoes():
-    """Busca preço atual e volume médio via RPC"""
     print("🔄 Buscando dados de mercado via RPC...")
     try:
         data = supabase.rpc('get_latest_market_data').execute().data
+        if not data:
+            print("⚠️ RPC retornou vazio. Verifique se há dados em 'cotacoes'.")
+            return pd.DataFrame()
         df = pd.DataFrame(data)
         print(f"✅ {len(df)} cotações mapeadas.")
         return df
     except Exception as e:
-        print(f"❌ Erro na RPC: {e}")
+        print(f" Erro na RPC: {e}")
+        print("💡 Dica: Crie os índices na tabela 'cotacoes' para evitar timeout.")
         return pd.DataFrame()
 
 def buscar_dividendos():
-    """Busca histórico de dividendos e JCP (últimos 7 anos)"""
-    print(" Buscando dividendos...")
+    print("🔄 Buscando dividendos...")
     data_limite = (datetime.now() - timedelta(days=365 * 7)).strftime('%Y-%m-%d')
     data = supabase.table("dividendos").select("ticker, data_pagamento, valor").gte("data_pagamento", data_limite).execute().data
     df = pd.DataFrame(data)
-    df['data_pagamento'] = pd.to_datetime(df['data_pagamento'])
-    df['valor'] = pd.to_numeric(df['valor'], errors='coerce')
+    if not df.empty:
+        df['data_pagamento'] = pd.to_datetime(df['data_pagamento'])
+        df['valor'] = pd.to_numeric(df['valor'], errors='coerce')
     print(f"✅ {len(df)} proventos carregados.")
     return df
 
 def calcular_agregacoes_dividendos(df_div):
-    """Calcula Dividendos 12m e Média 6 anos"""
+    if df_div.empty:
+        return pd.DataFrame(columns=['ticker', 'dividendos_12m']), pd.DataFrame(columns=['ticker', 'dividendos_6a_media'])
+        
     hoje = datetime.now()
     um_ano_atras = hoje - timedelta(days=365)
     seis_anos_atras = hoje - timedelta(days=365 * 6)
@@ -62,7 +66,6 @@ def calcular_agregacoes_dividendos(df_div):
     return div_12m, media_6a
 
 def calcular_cagr(df_fund):
-    """Calcula CAGR de 5 anos para Receita e Lucro"""
     print("🔄 Calculando CAGR 5 anos...")
     df_anual = df_fund[['ticker', 'ano', 'receita_liquida', 'lucro_liquido']].copy()
     cagr_data = []
@@ -90,9 +93,12 @@ def calcular_cagr(df_fund):
     return pd.DataFrame(cagr_data)
 
 def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
+    if df_cot.empty:
+        print("❌ Abortando: Dados de cotação não disponíveis.")
+        return
+
     print("🧮 Calculando indicadores e valuations...")
     
-    # Merge de dados
     df = df_fund.merge(df_cot, on='ticker', how='left')
     df = df.merge(df_div_12m, on='ticker', how='left')
     df = df.merge(df_div_6a, on='ticker', how='left')
@@ -147,14 +153,12 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df['preco_justo_graham_br'] = np.sqrt(15 * df['lpa'] * df['vpa'])
     df['preco_justo_bazin'] = df['dividendos_12m'] / 0.06
     
-    # Lynch (PEG): Proteção para CAGR entre 0 e 50%
     df['preco_justo_lynch'] = np.where(
         (df['cagr_lucro_5a'] > 0) & (df['cagr_lucro_5a'] <= 0.50),
         df['lpa'] * (df['cagr_lucro_5a'] * 100),
         np.nan
     )
     
-    # AGF (Barsi)
     df['preco_teto_medio'] = df['dividendos_6a_media'] / 0.06
     
     # 7. Upsides (%)
@@ -191,7 +195,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         for i in range(0, len(registros), lote):
             supabase.table("indicadores").upsert(
                 registros[i:i+lote], 
-                on_conflict="ticker" # Ajuste para 'ticker,data_calculo' se quiser histórico
+                on_conflict="ticker"
             ).execute()
         print("✅ Salvamento concluído.")
 
