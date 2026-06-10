@@ -20,20 +20,42 @@ def buscar_fundamentos():
     print(f"✅ {len(df)} registros anuais carregados.")
     return df
 
-def buscar_cotacoes():
-    print("🔄 Buscando dados de mercado via RPC...")
-    try:
-        data = supabase.rpc('get_latest_market_data').execute().data
-        if not data:
-            print("⚠️ RPC retornou vazio. Verifique se há dados em 'cotacoes'.")
-            return pd.DataFrame()
-        df = pd.DataFrame(data)
-        print(f"✅ {len(df)} cotações mapeadas.")
-        return df
-    except Exception as e:
-        print(f" Erro na RPC: {e}")
-        print("💡 Dica: Crie os índices na tabela 'cotacoes' para evitar timeout.")
+def buscar_cotacoes_em_lotes(tickers):
+    """Busca cotações em lotes para evitar timeout da API e calcula em memória"""
+    print(f"🔄 Buscando cotações dos últimos 200 dias para {len(tickers)} tickers...")
+    data_limite = (datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d')
+    
+    all_data = []
+    batch_size = 50  # Busca 50 tickers por vez para não estourar o limite da URL
+    
+    for i in range(0, len(tickers), batch_size):
+        batch_tickers = tickers[i:i+batch_size]
+        response = supabase.table("cotacoes").select("ticker, data, volume, fechamento").in_("ticker", batch_tickers).gte("data", data_limite).execute()
+        if response.data:
+            all_data.extend(response.data)
+        print(f"   📦 Lote {i//batch_size + 1} concluído.")
+        
+    if not all_data:
+        print("⚠️ Nenhuma cotação encontrada.")
         return pd.DataFrame()
+        
+    df = pd.DataFrame(all_data)
+    df['data'] = pd.to_datetime(df['data'])
+    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
+    df['fechamento'] = pd.to_numeric(df['fechamento'], errors='coerce').fillna(0)
+    
+    # Calcula volume financeiro
+    df['volume_financeiro'] = df['volume'] * df['fechamento']
+    
+    # Último preço de cada ticker
+    latest_prices = df.sort_values('data').groupby('ticker').tail(1)[['ticker', 'fechamento']].rename(columns={'fechamento': 'preco_atual'})
+    
+    # Média de volume financeiro dos 200 dias
+    avg_volumes = df.groupby('ticker')['volume_financeiro'].mean().reset_index().rename(columns={'volume_financeiro': 'volume_medio_diario'})
+    
+    df_cot = latest_prices.merge(avg_volumes, on='ticker', how='inner')
+    print(f"✅ {len(df_cot)} cotações processadas em memória.")
+    return df_cot
 
 def buscar_dividendos():
     print("🔄 Buscando dividendos...")
@@ -189,7 +211,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df_saida = df[[c for c in cols_finais if c in df.columns]].replace({np.inf: None, -np.inf: None, np.nan: None})
     registros = df_saida.to_dict('records')
     
-    print(f"💾 Salvando {len(registros)} registros no Supabase...")
+    print(f" Salvando {len(registros)} registros no Supabase...")
     if registros:
         lote = 100
         for i in range(0, len(registros), lote):
@@ -200,22 +222,24 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         print("✅ Salvamento concluído.")
 
 def main():
-    print("🚀 Iniciando Motor de Indicadores (Fase 2)...")
+    print(" Iniciando Motor de Indicadores (Fase 2)...")
     
     df_fund = buscar_fundamentos()
     if df_fund.empty:
         print("❌ Sem fundamentos. Abortando.")
         return
         
-    df_cot = buscar_cotacoes()
-    df_div = buscar_dividendos()
+    # Busca cotações em lotes (Solução definitiva para o timeout)
+    tickers_unicos = df_fund['ticker'].unique().tolist()
+    df_cot = buscar_cotacoes_em_lotes(tickers_unicos)
     
+    df_div = buscar_dividendos()
     df_div_12m, df_div_6a = calcular_agregacoes_dividendos(df_div)
     df_cagr = calcular_cagr(df_fund)
     
     calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr)
     
-    print("\n CONCLUÍDO! Fase 2 finalizada.")
+    print("\n🏆 CONCLUÍDO! Fase 2 finalizada.")
 
 if __name__ == "__main__":
     main()
