@@ -1,6 +1,7 @@
 from datetime import datetime, UTC
 
 import httpx
+import pandas as pd
 
 from etl.database.supabase_client import supabase
 
@@ -61,16 +62,28 @@ def main():
                 registros = []
 
                 for item in historicos:
+                    # Pré-calcula o volume financeiro na ingestão
+                    volume = item.get("volume", 0) or 0
+                    fechamento = item.get("close", 0) or 0
+                    
+                    # Converte para float para garantir cálculo correto
+                    try:
+                        volume_num = float(volume)
+                        fechamento_num = float(fechamento)
+                        volume_financeiro = volume_num * fechamento_num
+                    except (ValueError, TypeError):
+                        volume_financeiro = 0
 
                     registros.append(
                         {
                             "ticker": ticker,
                             "data": item["date"][:10],
-                            "abertura": item["open"],
-                            "maxima": item["high"],
-                            "minima": item["low"],
-                            "fechamento": item["close"],
-                            "volume": item["volume"],
+                            "abertura": item.get("open"),
+                            "maxima": item.get("high"),
+                            "minima": item.get("low"),
+                            "fechamento": fechamento,
+                            "volume": volume,
+                            "volume_financeiro": volume_financeiro,
                         }
                     )
 
