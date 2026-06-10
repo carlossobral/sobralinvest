@@ -228,7 +228,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         for i in range(0, len(registros), lote):
             supabase.table("indicadores").upsert(
                 registros[i:i+lote], 
-                on_conflict="ticker,data_calculo"  # Deve corresponder exatamente à constraint UNIQUE criada
+                on_conflict="ticker,data_calculo"
             ).execute()
         print("✅ Salvamento concluído.")
 
