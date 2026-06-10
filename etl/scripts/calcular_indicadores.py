@@ -12,11 +12,19 @@ def buscar_fundamentos():
     
     cols_numericas = ['receita_liquida', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido', 
                       'ativo_total', 'ativo_circulante', 'passivo_circulante', 'patrimonio_liquido', 
-                      'divida_liquida', 'quantidade_acoes']
+                      'divida_liquida', 'quantidade_acoes', 'ano']
     for col in cols_numericas:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-    print(f"✅ {len(df)} registros anuais carregados.")
+            
+    # GARANTE TIPO INTEIRO PARA O ANO
+    df['ano'] = df['ano'].astype('Int64')
+    
+    # CORREÇÃO CRÍTICA: Mantém APENAS o último ano reportado por ticker
+    # Isso evita colisão de múltiplos anos no merge e no upsert
+    df = df.sort_values('ano').drop_duplicates(subset=['ticker'], keep='last')
+    
+    print(f"✅ {len(df)} tickers carregados (apenas último ano: {df['ano'].max()}).")
     return df
 
 def buscar_cotacoes():
@@ -80,28 +88,36 @@ def calcular_agregacoes_dividendos(df_div):
 
 def calcular_cagr(df_fund):
     print("🔄 Calculando CAGR 5 anos...")
-    df_anual = df_fund[['ticker', 'ano', 'receita_liquida', 'lucro_liquido']].copy()
+    # Como agora temos apenas 1 ano por ticker, precisamos buscar o ano base diretamente no banco
+    # ou assumir que df_fund já tem o histórico. Para manter consistência, vamos recarregar apenas para CAGR.
+    data_hist = supabase.table("fundamentos_trimestrais").select("ticker, ano, receita_liquida, lucro_liquido").eq("trimestre", 4).execute().data
+    df_hist = pd.DataFrame(data_hist)
+    if df_hist.empty:
+        return pd.DataFrame(columns=['ticker', 'ano', 'cagr_receita_5a', 'cagr_lucro_5a'])
+        
+    df_hist['ano'] = pd.to_numeric(df_hist['ano'], errors='coerce').astype('Int64')
+    for c in ['receita_liquida', 'lucro_liquido']:
+        df_hist[c] = pd.to_numeric(df_hist[c], errors='coerce')
+        
     cagr_data = []
-    
-    for ticker in df_anual['ticker'].unique():
-        df_ticker = df_anual[df_anual['ticker'] == ticker].sort_values('ano')
+    for ticker in df_fund['ticker'].unique():
+        df_ticker = df_hist[df_hist['ticker'] == ticker].sort_values('ano')
         if len(df_ticker) < 2: continue
         
         ano_atual = df_ticker['ano'].max()
         reg_base = df_ticker[df_ticker['ano'] == (ano_atual - 5)]
         if reg_base.empty: continue
         
-        rec_atual, rec_base = df_ticker.iloc[-1]['receita_liquida'], reg_base.iloc[0]['receita_liquida']
-        luc_atual, luc_base = df_ticker.iloc[-1]['lucro_liquido'], reg_base.iloc[0]['lucro_liquido']
+        rec_atual = df_ticker[df_ticker['ano'] == ano_atual].iloc[0]['receita_liquida']
+        rec_base = reg_base.iloc[0]['receita_liquida']
+        luc_atual = df_ticker[df_ticker['ano'] == ano_atual].iloc[0]['lucro_liquido']
+        luc_base = reg_base.iloc[0]['lucro_liquido']
         
         cagr_rec = (rec_atual / rec_base) ** (1/5) - 1 if rec_base > 0 else np.nan
         cagr_luc = (luc_atual / luc_base) ** (1/5) - 1 if luc_base > 0 else np.nan
         
         cagr_data.append({'ticker': ticker, 'ano': ano_atual, 'cagr_receita_5a': cagr_rec, 'cagr_lucro_5a': cagr_luc})
         
-    if not cagr_data:
-        return pd.DataFrame(columns=['ticker', 'ano', 'cagr_receita_5a', 'cagr_lucro_5a'])
-    
     return pd.DataFrame(cagr_data)
 
 def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
@@ -208,7 +224,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     
     df_saida = df[[c for c in cols_finais if c in df.columns]].replace({np.inf: None, -np.inf: None, np.nan: None})
     
-    # CORREÇÃO CRÍTICA: Remove duplicatas exatas de ticker + data_calculo antes do upsert
+    # Segurança final contra duplicatas de upsert
     df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_calculo'], keep='last')
     
     registros = df_saida.to_dict('records')
@@ -224,7 +240,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         print("✅ Salvamento concluído.")
 
 def main():
-    print("🚀 Iniciando Motor de Indicadores (Fase 2 - Versão Blindada)...")
+    print("🚀 Iniciando Motor de Indicadores (Fase 2 - Versão Final)...")
     
     df_fund = buscar_fundamentos()
     if df_fund.empty: 
