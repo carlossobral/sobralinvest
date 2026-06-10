@@ -17,14 +17,16 @@ def buscar_fundamentos():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
             
-    # GARANTE TIPO INTEIRO PARA O ANO
     df['ano'] = df['ano'].astype('Int64')
     
-    # CORREÇÃO CRÍTICA: Mantém APENAS o último ano reportado por ticker
-    # Isso evita colisão de múltiplos anos no merge e no upsert
+    # FILTRO CRÍTICO: Ignora anos futuros (ex: 2025, 2026)
+    ano_atual = datetime.now().year
+    df = df[df['ano'] <= ano_atual]
+    
+    # Mantém APENAS o último ano válido reportado por ticker
     df = df.sort_values('ano').drop_duplicates(subset=['ticker'], keep='last')
     
-    print(f"✅ {len(df)} tickers carregados (apenas último ano: {df['ano'].max()}).")
+    print(f"✅ {len(df)} tickers carregados (último ano válido: {df['ano'].max()}).")
     return df
 
 def buscar_cotacoes():
