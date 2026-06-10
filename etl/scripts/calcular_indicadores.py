@@ -206,7 +206,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     
     # Limpeza para o Supabase
     cols_finais = [
-        'ticker', 'ano', 'data_calculo', 'data_balanco',
+        'ticker', 'ano', 'data_calculo', 'data_balanco', 'preco_atual', # <-- ADICIONADO AQUI
         'dy_atual', 'p_l', 'p_vp', 'p_receita', 'p_ativo', 'p_cap_giro', 
         'p_ativo_circ_liq', 'p_ebit', 'p_ebitda', 'ev_ebit', 'ev_ebitda',
         'roe', 'roa', 'roic', 'giro_ativos', 'margem_bruta', 'margem_ebit', 
