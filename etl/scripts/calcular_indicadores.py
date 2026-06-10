@@ -20,15 +20,48 @@ def buscar_fundamentos():
     return df
 
 def buscar_cotacoes():
-    """Usa a RPC otimizada. Leve, rápida e à prova de falhas."""
-    print("🔄 Buscando dados de mercado via RPC otimizada...")
+    """
+    Abordagem 100% Python: Busca apenas os últimos 30 dias e calcula no Pandas.
+    Isso evita QUALQUER timeout de SQL/RPC no Supabase.
+    """
+    print("🔄 Buscando cotações recentes (últimos 30 dias)...")
+    data_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    
     try:
-        data = supabase.rpc('get_latest_market_data').execute().data
+        # Busca direta na tabela, sem RPC
+        response = supabase.table("cotacoes").select("ticker, data, fechamento, volume").gte("data", data_limite).execute()
+        data = response.data
+        
+        if not data:
+            print("⚠️ Nenhuma cotação encontrada nos últimos 30 dias.")
+            return pd.DataFrame()
+            
         df = pd.DataFrame(data)
-        print(f"✅ {len(df)} cotações mapeadas instantaneamente.")
-        return df
+        
+        # Garante tipos numéricos
+        df['fechamento'] = pd.to_numeric(df['fechamento'], errors='coerce')
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
+        df['data'] = pd.to_datetime(df['data'])
+        
+        # Calcula volume financeiro em memória (caso a coluna não exista no banco)
+        df['volume_financeiro'] = df['volume'] * df['fechamento']
+        
+        # 1. Último preço de cada ticker
+        df_sorted = df.sort_values('data')
+        latest_prices = df_sorted.drop_duplicates(subset=['ticker'], keep='last')[['ticker', 'fechamento']]
+        latest_prices = latest_prices.rename(columns={'fechamento': 'preco_atual'})
+        
+        # 2. Média de volume financeiro dos dias disponíveis
+        avg_volume = df.groupby('ticker')['volume_financeiro'].mean().reset_index()
+        avg_volume = avg_volume.rename(columns={'volume_financeiro': 'volume_medio_diario'})
+        
+        # Merge dos dois
+        df_cot = latest_prices.merge(avg_volume, on='ticker', how='inner')
+        print(f"✅ {len(df_cot)} cotações processadas em memória com sucesso.")
+        return df_cot
+        
     except Exception as e:
-        print(f"❌ Erro na RPC: {e}")
+        print(f"❌ Erro ao buscar cotações: {e}")
         return pd.DataFrame()
 
 def buscar_dividendos():
@@ -94,7 +127,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df = df.merge(df_div_12m, on='ticker', how='left')
     df = df.merge(df_div_6a, on='ticker', how='left')
     
-    # Merge seguro com df_cagr (pode estar vazio)
+    # Merge seguro com df_cagr
     if not df_cagr.empty and 'ticker' in df_cagr.columns:
         df = df.merge(df_cagr, on=['ticker', 'ano'], how='left')
     else:
@@ -197,12 +230,14 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         print("✅ Salvamento concluído.")
 
 def main():
-    print("🚀 Iniciando Motor de Indicadores (Fase 2 - Otimizada)...")
+    print("🚀 Iniciando Motor de Indicadores (Fase 2 - Versão Blindada)...")
     
     df_fund = buscar_fundamentos()
-    if df_fund.empty: return
+    if df_fund.empty: 
+        print("❌ Sem fundamentos. Abortando.")
+        return
         
-    df_cot = buscar_cotacoes()
+    df_cot = buscar_cotacoes() # Agora é 100% Python, sem RPC
     df_div = buscar_dividendos()
     
     df_div_12m, df_div_6a = calcular_agregacoes_dividendos(df_div)
