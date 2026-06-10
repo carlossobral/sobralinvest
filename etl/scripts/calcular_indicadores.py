@@ -20,15 +20,10 @@ def buscar_fundamentos():
     return df
 
 def buscar_cotacoes():
-    """
-    Abordagem 100% Python: Busca apenas os últimos 30 dias e calcula no Pandas.
-    Isso evita QUALQUER timeout de SQL/RPC no Supabase.
-    """
     print("🔄 Buscando cotações recentes (últimos 30 dias)...")
     data_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
     
     try:
-        # Busca direta na tabela, sem RPC
         response = supabase.table("cotacoes").select("ticker, data, fechamento, volume").gte("data", data_limite).execute()
         data = response.data
         
@@ -37,25 +32,18 @@ def buscar_cotacoes():
             return pd.DataFrame()
             
         df = pd.DataFrame(data)
-        
-        # Garante tipos numéricos
         df['fechamento'] = pd.to_numeric(df['fechamento'], errors='coerce')
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
         df['data'] = pd.to_datetime(df['data'])
         
-        # Calcula volume financeiro em memória (caso a coluna não exista no banco)
         df['volume_financeiro'] = df['volume'] * df['fechamento']
         
-        # 1. Último preço de cada ticker
-        df_sorted = df.sort_values('data')
-        latest_prices = df_sorted.drop_duplicates(subset=['ticker'], keep='last')[['ticker', 'fechamento']]
+        latest_prices = df.sort_values('data').drop_duplicates(subset=['ticker'], keep='last')[['ticker', 'fechamento']]
         latest_prices = latest_prices.rename(columns={'fechamento': 'preco_atual'})
         
-        # 2. Média de volume financeiro dos dias disponíveis
         avg_volume = df.groupby('ticker')['volume_financeiro'].mean().reset_index()
         avg_volume = avg_volume.rename(columns={'volume_financeiro': 'volume_medio_diario'})
         
-        # Merge dos dois
         df_cot = latest_prices.merge(avg_volume, on='ticker', how='inner')
         print(f"✅ {len(df_cot)} cotações processadas em memória com sucesso.")
         return df_cot
@@ -127,7 +115,6 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df = df.merge(df_div_12m, on='ticker', how='left')
     df = df.merge(df_div_6a, on='ticker', how='left')
     
-    # Merge seguro com df_cagr
     if not df_cagr.empty and 'ticker' in df_cagr.columns:
         df = df.merge(df_cagr, on=['ticker', 'ano'], how='left')
     else:
@@ -204,9 +191,9 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     else:
         df['data_balanco'] = None
     
-    # Limpeza para o Supabase
+    # Lista final de colunas (com preco_atual incluído)
     cols_finais = [
-        'ticker', 'ano', 'data_calculo', 'data_balanco', 'preco_atual', # <-- ADICIONADO AQUI
+        'ticker', 'ano', 'data_calculo', 'data_balanco', 'preco_atual',
         'dy_atual', 'p_l', 'p_vp', 'p_receita', 'p_ativo', 'p_cap_giro', 
         'p_ativo_circ_liq', 'p_ebit', 'p_ebitda', 'ev_ebit', 'ev_ebitda',
         'roe', 'roa', 'roic', 'giro_ativos', 'margem_bruta', 'margem_ebit', 
@@ -220,6 +207,10 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     ]
     
     df_saida = df[[c for c in cols_finais if c in df.columns]].replace({np.inf: None, -np.inf: None, np.nan: None})
+    
+    # CORREÇÃO CRÍTICA: Remove duplicatas exatas de ticker + data_calculo antes do upsert
+    df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_calculo'], keep='last')
+    
     registros = df_saida.to_dict('records')
     
     print(f"💾 Salvando {len(registros)} registros no Supabase...")
@@ -240,7 +231,7 @@ def main():
         print("❌ Sem fundamentos. Abortando.")
         return
         
-    df_cot = buscar_cotacoes() # Agora é 100% Python, sem RPC
+    df_cot = buscar_cotacoes()
     df_div = buscar_dividendos()
     
     df_div_12m, df_div_6a = calcular_agregacoes_dividendos(df_div)
