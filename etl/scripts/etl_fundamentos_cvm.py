@@ -10,18 +10,19 @@ from etl.database.supabase_client import supabase
 ANO_INICIAL = 2018  
 ANO_FINAL = datetime.now().year  
 
+# REGEX ROBUSTO: Prioriza códigos de conta oficiais da CVM (^3.01$) e fallback por nome
 MAPEAMENTO = {
-    'receita_liquida': r'(?i)receita.de.venda|receita.operacional.bruta',
-    'lucro_bruto': r'(?i)resultado.bruto|lucro.bruto',
-    'ebit': r'(?i)resultado.antes.do.resultado.financeiro|resultado.operacional',
-    'depreciacao_amortizacao': r'(?i)deprecia|amortiza',
-    'lucro_liquido': r'(?i)consolidado.do.per.odo|lucro.l.quido.do.exerc.cio',
-    'ativo_total': r'(?i)total.do.ativo|ativo.total',
-    'ativo_circulante': r'(?i)ativo.circulante(?!.*n.o.circulante)',
-    'passivo_circulante': r'(?i)passivo.circulante(?!.*n.o.circulante)',
-    'patrimonio_liquido': r'(?i)patrim.nio.l.quido.consolidado|patrim.nio.l.quido',
-    'caixa': r'(?i)caixa.e.equivalentes|disponibilidades',
-    'divida_bruta': r'(?i)debentures|empr.stimos.e.financiamentos'
+    'receita_liquida': r'(?i)^3\.01$|^3\.01\.00$|receita.de.intermedia..o.financeira|receita.de.venda.de.bens',
+    'lucro_bruto': r'(?i)^3\.03$|^3\.03\.00$|resultado.bruto',
+    'ebit': r'(?i)^3\.05$|^3\.05\.00$|resultado.antes.do.resultado.financeiro.e.dos.tributos',
+    'depreciacao_amortizacao': r'(?i)^3\.05\.03$|^3\.05\.04$|deprecia|amortiza',
+    'lucro_liquido': r'(?i)^3\.11$|^3\.11\.00$|lucro.preju.zo.consolidado.do.per.odo',
+    'ativo_total': r'(?i)^1\.01$|^1\.01\.00$|total.do.ativo',
+    'ativo_circulante': r'(?i)^1\.01\.01$|^1\.01\.01\.00$|ativo.circulante',
+    'passivo_circulante': r'(?i)^2\.01$|^2\.01\.00$|passivo.circulante',
+    'patrimonio_liquido': r'(?i)^2\.03$|^2\.03\.00$|patrim.nio.l.quido.consolidado',
+    'caixa': r'(?i)^1\.01\.01\.01$|^1\.01\.01\.01\.00$|caixa.e.equivalentes|disponibilidades',
+    'divida_bruta': r'(?i)^2\.02$|^2\.02\.00$|debentures|empr.stimos.e.financiamentos'
 }
 
 def obter_dados_empresas():
@@ -41,12 +42,16 @@ def obter_dados_empresas():
     return mapa_tickers, mapa_acoes
 
 def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
+    # Ignora anos futuros (ex: 2025, 2026) que podem existir como erro na base da CVM
+    if ano > datetime.now().year:
+        print(f"  ⚠️ Ignorando ano futuro: {ano}")
+        return []
+
     url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/{tipo_doc.lower()}_cia_aberta_{ano}.zip"
     
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
         if r.status_code != 200: 
-            print(f"  ⚠️ Arquivo {ano} {tipo_doc} não encontrado (Status {r.status_code})")
             return []
         
         dados_finais = []
@@ -54,7 +59,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
             
             if not arquivos_consolidados:
-                print(f"  ️ Nenhum arquivo consolidado encontrado no ZIP de {ano} {tipo_doc}")
                 return []
 
             for nome in arquivos_consolidados:
@@ -62,7 +66,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
                 for conta_padrao, regex in MAPEAMENTO.items():
-                    df_filtrado = df[df['DS_CONTA'].str.contains(regex, na=False, regex=True)]
+                    # Busca por código exato (^3.11$) OU por nome da conta
+                    df_filtrado = df[
+                        df['CD_CONTA'].astype(str).str.match(regex, na=False) | 
+                        df['DS_CONTA'].str.contains(regex, na=False, regex=True)
+                    ]
                     if not df_filtrado.empty:
                         agg = df_filtrado.groupby(['CD_CVM', 'DT_REFER'])['valor'].sum().reset_index()
                         agg['conta'] = conta_padrao
@@ -94,6 +102,10 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         df_pivot = df_pivot.dropna(subset=['ticker'])
         
         df_pivot['ano'] = pd.to_datetime(df_pivot['DT_REFER']).dt.year
+        
+        # FILTRO CRÍTICO: Ignora registros com ano extraído da data de referência que seja futuro
+        df_pivot = df_pivot[df_pivot['ano'] <= datetime.now().year]
+        
         df_pivot['data_referencia'] = df_pivot['DT_REFER']
         
         if tipo_doc == 'ITR':
@@ -119,8 +131,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'quantidade_acoes' in df_final.columns:
             df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
             
-        # CORREÇÃO CRÍTICA: Remover duplicatas para evitar erro de ON CONFLICT no Postgres
-        # Mantém a última versão encontrada (geralmente a mais recente/reformulada)
+        # Remove duplicatas de ticker/ano/trimestre (mantém a última versão, geralmente a reformulada)
         df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
             
         return df_final.to_dict('records')
@@ -130,7 +141,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         return []
 
 def main():
-    print("🔄 Iniciando carga otimizada de fundamentos (Camada Silver)...")
+    print("🔄 Iniciando carga de fundamentos (Regex por Código CVM)...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
     
     if not mapa_tickers:
@@ -139,15 +150,15 @@ def main():
 
     total_registros = 0
     anos = range(ANO_INICIAL, ANO_FINAL + 1)
-    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL}...")
+    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL} (anos futuros serão ignorados)...")
     
     for ano in anos:
-        print(f"\n Processando {ano}...")
+        print(f"\n📊 Processando {ano}...")
         
         registros_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
         if registros_dfp:
             registros_anuais = [{k: v for k, v in reg.items() if k != 'trimestre'} for reg in registros_dfp]
-            supabase.table("fundamentos_anuais").upsert(registros_anuais, on_conflict="ticker,ano").execute()
+            supabase.table("fundamentos_trimestrais").upsert(registros_anuais, on_conflict="ticker,ano").execute()
             supabase.table("fundamentos_trimestrais").upsert(registros_dfp, on_conflict="ticker,ano,trimestre").execute()
             total_registros += len(registros_dfp)
             print(f"  ✅ DFP {ano}: {len(registros_dfp)} registros")
