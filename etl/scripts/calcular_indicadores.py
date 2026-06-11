@@ -207,7 +207,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     else:
         df['data_balanco'] = None
     
-    # Lista final de colunas (com preco_atual incluído)
+    # Lista final de colunas (usando os nomes originais do schema da tabela indicadores)
     cols_finais = [
         'ticker', 'ano', 'data_calculo', 'data_balanco', 'preco_atual',
         'dy_atual', 'p_l', 'p_vp', 'p_receita', 'p_ativo', 'p_cap_giro', 
@@ -215,16 +215,24 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         'roe', 'roa', 'roic', 'giro_ativos', 'margem_bruta', 'margem_ebit', 
         'margem_ebitda', 'margem_liquida', 'liquidez_corrente', 'passivos_ativos', 
         'pl_ativos', 'div_liq_ativos', 'div_liq_pl', 'div_liq_ebit', 'div_liq_ebitda',
-        'cagr_receita_5a', 'cagr_lucro_5a', 'receita_liquida_ytd', 'lucro_liquido_ytd', 'ebit_ytd',
+        'cagr_receita_5a', 'cagr_lucro_5a', 'receita_liquida', 'lucro_liquido', 'ebit',
         'lpa', 'vpa', 'preco_justo_graham', 'graham_upside', 'preco_justo_graham_br', 
         'graham_br_upside', 'preco_justo_bazin', 'bazin_upside', 'preco_justo_lynch', 
         'lynch_upside', 'preco_teto_medio', 'agf_upside', 'pl_absoluto', 
         'dividendos_12m', 'dividendos_6a_media', 'volume_medio_diario'
     ]
     
+    # Filtra apenas colunas que existem no DataFrame
     df_saida = df[[c for c in cols_finais if c in df.columns]].replace({np.inf: None, -np.inf: None, np.nan: None})
     
-    # CORREÇÃO CRÍTICA: Remove duplicatas exatas de ticker + data_calculo antes do upsert
+    # CORREÇÃO CRÍTICA: Renomeia as colunas _ytd para os nomes originais esperados pelo banco
+    df_saida = df_saida.rename(columns={
+        'receita_liquida_ytd': 'receita_liquida',
+        'lucro_liquido_ytd': 'lucro_liquido',
+        'ebit_ytd': 'ebit'
+    })
+    
+    # Remove duplicatas exatas de ticker + data_calculo antes do upsert
     df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_calculo'], keep='last')
     
     registros = df_saida.to_dict('records')
