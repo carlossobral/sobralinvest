@@ -7,7 +7,7 @@ from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
 # CONFIGURAÇÃO DE RANGE DINÂMICO
-ANO_INICIAL = 2018  
+ANO_INICIAL = 2019  
 ANO_FINAL = datetime.now().year  
 
 # REGEX ROBUSTO: Prioriza códigos de conta oficiais da CVM (^3.01$) e fallback por nome
@@ -24,6 +24,9 @@ MAPEAMENTO = {
     'caixa': r'(?i)^1\.01\.01\.01$|^1\.01\.01\.01\.00$|caixa.e.equivalentes|disponibilidades',
     'divida_bruta': r'(?i)^2\.02$|^2\.02\.00$|debentures|empr.stimos.e.financiamentos'
 }
+
+# Colunas da DRE que precisam ser desacumuladas
+COLUNAS_DRE = ['receita_liquida', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
 
 def obter_dados_empresas():
     print("🔄 Buscando dados da tabela empresas...")
@@ -42,7 +45,6 @@ def obter_dados_empresas():
     return mapa_tickers, mapa_acoes
 
 def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
-    # Ignora anos futuros (ex: 2025, 2026) que podem existir como erro na base da CVM
     if ano > datetime.now().year:
         print(f"  ⚠️ Ignorando ano futuro: {ano}")
         return []
@@ -66,7 +68,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
                 for conta_padrao, regex in MAPEAMENTO.items():
-                    # Busca por código exato (^3.11$) OU por nome da conta
                     df_filtrado = df[
                         df['CD_CONTA'].astype(str).str.match(regex, na=False) | 
                         df['DS_CONTA'].str.contains(regex, na=False, regex=True)
@@ -102,10 +103,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         df_pivot = df_pivot.dropna(subset=['ticker'])
         
         df_pivot['ano'] = pd.to_datetime(df_pivot['DT_REFER']).dt.year
-        
-        # FILTRO CRÍTICO: Ignora registros com ano extraído da data de referência que seja futuro
         df_pivot = df_pivot[df_pivot['ano'] <= datetime.now().year]
-        
         df_pivot['data_referencia'] = df_pivot['DT_REFER']
         
         if tipo_doc == 'ITR':
@@ -117,10 +115,16 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             
         df_pivot['divida_liquida'] = df_pivot.get('divida_bruta', 0) - df_pivot.get('caixa', 0)
         
-        cols = ['ticker', 'ano', 'trimestre', 'data_referencia', 'receita_liquida', 'lucro_bruto', 
-                'ebit', 'ebitda', 'lucro_liquido', 'ativo_total', 'ativo_circulante', 
-                'passivo_circulante', 'patrimonio_liquido', 'caixa', 'divida_bruta', 
-                'divida_liquida', 'quantidade_acoes']
+        # Renomear colunas da DRE para _ytd
+        for col in COLUNAS_DRE:
+            if col in df_pivot.columns:
+                df_pivot[f'{col}_ytd'] = df_pivot[col]
+                df_pivot = df_pivot.drop(columns=[col])
+        
+        cols = ['ticker', 'ano', 'trimestre', 'data_referencia']
+        cols += [f'{col}_ytd' for col in COLUNAS_DRE if f'{col}_ytd' in df_pivot.columns]
+        cols += ['ativo_total', 'ativo_circulante', 'passivo_circulante', 
+                 'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida', 'quantidade_acoes']
         
         df_final = df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None})
         
@@ -131,45 +135,115 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'quantidade_acoes' in df_final.columns:
             df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
             
-        # Remove duplicatas de ticker/ano/trimestre (mantém a última versão, geralmente a reformulada)
         df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
             
-        return df_final.to_dict('records')
+        return df_final
         
     except Exception as e:
         print(f"❌ Erro ano {ano} {tipo_doc}: {e}")
-        return []
+        return pd.DataFrame()
+
+def calcular_colunas_q(df):
+    """
+    Calcula as colunas _q (isoladas do trimestre) subtraindo o balanço anterior.
+    Se não houver balanço anterior, coluna_q = NULL.
+    """
+    print("🧮 Calculando colunas _q (desacumulador)...")
+    
+    # Ordenar por ticker e data_referencia
+    df = df.sort_values(['ticker', 'data_referencia'])
+    
+    # Para cada coluna da DRE, calcular a diferença
+    for col_base in COLUNAS_DRE:
+        col_ytd = f'{col_base}_ytd'
+        col_q = f'{col_base}_q'
+        
+        if col_ytd not in df.columns:
+            continue
+        
+        # Calcular a diferença dentro de cada ticker
+        df[col_q] = df.groupby('ticker')[col_ytd].diff()
+        
+        # Para o primeiro registro de cada ticker (não tem anterior), manter o valor ytd
+        # ou deixar NULL conforme acordado
+        # Vamos deixar NULL para o primeiro registro
+        first_records = df.groupby('ticker').head(1).index
+        df.loc[first_records, col_q] = np.nan
+        
+        # Se a diferença for negativa (erro de dados), deixar NULL
+        df.loc[df[col_q] < 0, col_q] = np.nan
+    
+    print(f"✅ Colunas _q calculadas para {len(df)} registros.")
+    return df
 
 def main():
-    print("🔄 Iniciando carga de fundamentos (Regex por Código CVM)...")
+    print("🔄 Iniciando carga de fundamentos (com desacumulador)...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
     
     if not mapa_tickers:
         print("❌ Nenhum ticker com CD_CVM encontrado. Abortando.")
         return
 
-    total_registros = 0
+    todos_registros = []
     anos = range(ANO_INICIAL, ANO_FINAL + 1)
-    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL} (anos futuros serão ignorados)...")
+    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL}...")
     
+    # Fase 1: Extrair todos os dados
     for ano in anos:
         print(f"\n📊 Processando {ano}...")
         
-        registros_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
-        if registros_dfp:
-            registros_anuais = [{k: v for k, v in reg.items() if k != 'trimestre'} for reg in registros_dfp]
-            supabase.table("fundamentos_trimestrais").upsert(registros_anuais, on_conflict="ticker,ano").execute()
-            supabase.table("fundamentos_trimestrais").upsert(registros_dfp, on_conflict="ticker,ano,trimestre").execute()
-            total_registros += len(registros_dfp)
-            print(f"  ✅ DFP {ano}: {len(registros_dfp)} registros")
+        df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
+        if not df_dfp.empty:
+            todos_registros.append(df_dfp)
+            print(f"  ✅ DFP {ano}: {len(df_dfp)} registros")
             
-        registros_itr = processar_ano(ano, 'ITR', mapa_tickers, mapa_acoes)
-        if registros_itr:
-            supabase.table("fundamentos_trimestrais").upsert(registros_itr, on_conflict="ticker,ano,trimestre").execute()
-            total_registros += len(registros_itr)
-            print(f"  ✅ ITR {ano}: {len(registros_itr)} registros")
-
-    print(f"\n🏆 CONCLUÍDO! {total_registros} registros salvos.")
+        df_itr = processar_ano(ano, 'ITR', mapa_tickers, mapa_acoes)
+        if not df_itr.empty:
+            todos_registros.append(df_itr)
+            print(f"  ✅ ITR {ano}: {len(df_itr)} registros")
+    
+    if not todos_registros:
+        print("❌ Nenhum registro extraído. Abortando.")
+        return
+    
+    # Consolidar todos os DataFrames
+    df_consolidado = pd.concat(todos_registros, ignore_index=True)
+    print(f"\n📦 Total de {len(df_consolidado)} registros consolidados.")
+    
+    # Fase 2: Calcular colunas _q (desacumulador)
+    df_consolidado = calcular_colunas_q(df_consolidado)
+    
+    # Fase 3: Salvar no banco
+    print("💾 Salvando no Supabase...")
+    df_consolidado = df_consolidado.replace({np.nan: None, pd.NaT: None})
+    registros = df_consolidado.to_dict('records')
+    
+    total_salvos = 0
+    lote = 100
+    for i in range(0, len(registros), lote):
+        supabase.table("fundamentos_trimestrais").upsert(
+            registros[i:i+lote], 
+            on_conflict="ticker,ano,trimestre"
+        ).execute()
+        total_salvos += len(registros[i:i+lote])
+    
+    print(f"\n🏆 CONCLUÍDO! {total_salvos} registros salvos.")
+    
+    # Validação: verificar se a soma dos _q bate com o _ytd do T4
+    print("\n🔍 Validando desacumulador (amostra PETR4 2024)...")
+    validacao = supabase.table("fundamentos_trimestrais").select(
+        "ticker, ano, trimestre, receita_liquida_ytd, receita_liquida_q"
+    ).eq("ticker", "PETR4").eq("ano", 2024).execute().data
+    
+    if validacao:
+        df_val = pd.DataFrame(validacao)
+        print(df_val[['ticker', 'ano', 'trimestre', 'receita_liquida_ytd', 'receita_liquida_q']])
+        soma_q = df_val['receita_liquida_q'].sum()
+        ytd_t4 = df_val[df_val['trimestre'] == 4]['receita_liquida_ytd'].iloc[0] if 4 in df_val['trimestre'].values else None
+        if ytd_t4:
+            print(f"\nSoma dos _q: {soma_q:,.0f}")
+            print(f"YTD do T4: {ytd_t4:,.0f}")
+            print(f"Diferença: {abs(soma_q - ytd_t4):,.0f} ({'✅ OK' if abs(soma_q - ytd_t4) < 1 else '❌ ERRO'})")
 
 if __name__ == "__main__":
     main()
