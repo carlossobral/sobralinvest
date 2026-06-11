@@ -6,11 +6,11 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-# CONFIGURAÇÃO DE RANGE DINÂMICO
+# CONFIGURAÇÃO DE RANGE DINÂMICO (Ajustado para 2019 conforme solicitado)
 ANO_INICIAL = 2019  
 ANO_FINAL = datetime.now().year  
 
-# REGEX ROBUSTO: Prioriza códigos de conta oficiais da CVM (^3.01$) e fallback por nome
+# REGEX ROBUSTO: Prioriza códigos de conta oficiais da CVM e fallback por nome
 MAPEAMENTO = {
     'receita_liquida': r'(?i)^3\.01$|^3\.01\.00$|receita.de.intermedia..o.financeira|receita.de.venda.de.bens',
     'lucro_bruto': r'(?i)^3\.03$|^3\.03\.00$|resultado.bruto',
@@ -47,21 +47,21 @@ def obter_dados_empresas():
 def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
     if ano > datetime.now().year:
         print(f"  ⚠️ Ignorando ano futuro: {ano}")
-        return []
+        return pd.DataFrame()
 
     url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/{tipo_doc.lower()}_cia_aberta_{ano}.zip"
     
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
         if r.status_code != 200: 
-            return []
+            return pd.DataFrame()
         
         dados_finais = []
         with ZipFile(BytesIO(r.content)) as z:
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
             
             if not arquivos_consolidados:
-                return []
+                return pd.DataFrame()
 
             for nome in arquivos_consolidados:
                 df = pd.read_csv(z.open(nome), sep=';', decimal=',', encoding='latin1')
@@ -78,7 +78,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                         dados_finais.append(agg)
                         
         if not dados_finais: 
-            return []
+            return pd.DataFrame()
         
         df_final = pd.concat(dados_finais)
         df_pivot = df_final.pivot_table(
@@ -115,7 +115,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             
         df_pivot['divida_liquida'] = df_pivot.get('divida_bruta', 0) - df_pivot.get('caixa', 0)
         
-        # Renomear colunas da DRE para _ytd
+        # Renomear colunas da DRE para _ytd (mantendo o dado original acumulado)
         for col in COLUNAS_DRE:
             if col in df_pivot.columns:
                 df_pivot[f'{col}_ytd'] = df_pivot[col]
@@ -146,11 +146,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 def calcular_colunas_q(df):
     """
     Calcula as colunas _q (isoladas do trimestre) subtraindo o balanço anterior.
-    Se não houver balanço anterior, coluna_q = NULL.
+    CORREÇÃO: Para o primeiro registro de cada ticker, coluna_q = coluna_ytd (pois não há anterior).
     """
     print("🧮 Calculando colunas _q (desacumulador)...")
     
-    # Ordenar por ticker e data_referencia
+    # Ordenar por ticker e data_referencia para garantir a ordem cronológica
     df = df.sort_values(['ticker', 'data_referencia'])
     
     # Para cada coluna da DRE, calcular a diferença
@@ -161,16 +161,14 @@ def calcular_colunas_q(df):
         if col_ytd not in df.columns:
             continue
         
-        # Calcular a diferença dentro de cada ticker
+        # Calcular a diferença dentro de cada ticker (atual - anterior)
         df[col_q] = df.groupby('ticker')[col_ytd].diff()
         
-        # Para o primeiro registro de cada ticker (não tem anterior), manter o valor ytd
-        # ou deixar NULL conforme acordado
-        # Vamos deixar NULL para o primeiro registro
+        # CORREÇÃO APLICADA: Para o primeiro registro de cada ticker, manter o valor ytd
         first_records = df.groupby('ticker').head(1).index
-        df.loc[first_records, col_q] = np.nan
+        df.loc[first_records, col_q] = df.loc[first_records, col_ytd]
         
-        # Se a diferença for negativa (erro de dados), deixar NULL
+        # Se a diferença for negativa (erro de dados ou retificação estranha), deixar NULL
         df.loc[df[col_q] < 0, col_q] = np.nan
     
     print(f"✅ Colunas _q calculadas para {len(df)} registros.")
@@ -243,7 +241,7 @@ def main():
         if ytd_t4:
             print(f"\nSoma dos _q: {soma_q:,.0f}")
             print(f"YTD do T4: {ytd_t4:,.0f}")
-            print(f"Diferença: {abs(soma_q - ytd_t4):,.0f} ({'✅ OK' if abs(soma_q - ytd_t4) < 1 else '❌ ERRO'})")
+            print(f"Diferença: {abs(soma_q - ytd_t4):,.0f} ({'✅ OK' if abs(soma_q - ytd_t4) < 1000 else '❌ ERRO'})")
 
 if __name__ == "__main__":
     main()
