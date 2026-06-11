@@ -145,13 +145,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
 def calcular_colunas_q(df):
     """
-    Calcula as colunas _q (isoladas do trimestre) subtraindo o balanço anterior.
-    LÓGICA DEFINITIVA: diff() gera NaN no primeiro registro. fillna preenche com o próprio _ytd.
+    Calcula as colunas _q (isoladas do trimestre).
+    CORREÇÃO CRÍTICA: Agrupa por TICKER e ANO para evitar diferença negativa na virada do ano.
     """
     print("🧮 Calculando colunas _q (desacumulador)...")
     
-    # Ordenar e resetar índice para garantir manipulação segura
-    df = df.sort_values(['ticker', 'data_referencia']).reset_index(drop=True)
+    # Ordenar cronologicamente
+    df = df.sort_values(['ticker', 'ano', 'data_referencia']).reset_index(drop=True)
     
     for col_base in COLUNAS_DRE:
         col_ytd = f'{col_base}_ytd'
@@ -160,15 +160,19 @@ def calcular_colunas_q(df):
         if col_ytd not in df.columns:
             continue
         
-        # 1. Calcular a diferença (o primeiro registro de cada ticker será NaN)
-        df[col_q] = df.groupby('ticker')[col_ytd].diff()
+        # CRIA UM GRUPO ÚNICO POR TICKER + ANO
+        # Isso garante que o diff() não compare T1/2024 com T4/2023
+        grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         
-        # 2. CORREÇÃO DEFINITIVA: Preencher o NaN do primeiro registro com o valor _ytd
+        # 1. Calcular a diferença DENTRO DO ANO
+        df[col_q] = df.groupby(grupo)[col_ytd].diff()
+        
+        # 2. Preencher o NaN do primeiro trimestre com o valor YTD
         df[col_q] = df[col_q].fillna(df[col_ytd])
         
-        # 3. Se a diferença for negativa (erro de dados), forçar NaN
-        df.loc[df[col_q] < 0, col_q] = np.nan
-    
+        # 3. Remover a verificação de negativos que estava matando o T1 erroneamente.
+        # (Retificações negativas raras são melhor ignoradas do que zeradas globalmente)
+
     print(f"✅ Colunas _q calculadas para {len(df)} registros.")
     return df
 
@@ -239,7 +243,8 @@ def main():
         if ytd_t4:
             print(f"\nSoma dos _q: {soma_q:,.0f}")
             print(f"YTD do T4: {ytd_t4:,.0f}")
-            print(f"Diferença: {abs(soma_q - ytd_t4):,.0f} ({'✅ OK' if abs(soma_q - ytd_t4) < 1000 else '❌ ERRO'})")
+            diff = abs(soma_q - ytd_t4)
+            print(f"Diferença: {diff:,.0f} ({'✅ OK' if diff < 1000 else '❌ ERRO'})")
 
 if __name__ == "__main__":
     main()
