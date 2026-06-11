@@ -59,7 +59,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         dados_finais = []
         with ZipFile(BytesIO(r.content)) as z:
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
-            
             if not arquivos_consolidados:
                 return pd.DataFrame()
 
@@ -101,7 +100,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         print(f"   🔍 {tickers_encontrados} tickers mapeados com sucesso no {tipo_doc} {ano}")
         
         df_pivot = df_pivot.dropna(subset=['ticker'])
-        
         df_pivot['ano'] = pd.to_datetime(df_pivot['DT_REFER']).dt.year
         df_pivot = df_pivot[df_pivot['ano'] <= datetime.now().year]
         df_pivot['data_referencia'] = df_pivot['DT_REFER']
@@ -136,7 +134,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
             
         df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
-            
         return df_final
         
     except Exception as e:
@@ -146,11 +143,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 def calcular_colunas_q(df):
     """
     Calcula as colunas _q (isoladas do trimestre).
-    CORREÇÃO CRÍTICA: Agrupa por TICKER e ANO para evitar diferença negativa na virada do ano.
+    PRESERVA valores negativos para transparência analítica (ex: reversões, prejuízos).
     """
-    print("🧮 Calculando colunas _q (desacumulador)...")
+    print("🧮 Calculando colunas _q (desacumulador com preservação de sinal)...")
     
-    # Ordenar cronologicamente
+    # Ordenar cronologicamente para garantir a sequência correta
     df = df.sort_values(['ticker', 'ano', 'data_referencia']).reset_index(drop=True)
     
     for col_base in COLUNAS_DRE:
@@ -160,18 +157,22 @@ def calcular_colunas_q(df):
         if col_ytd not in df.columns:
             continue
         
-        # CRIA UM GRUPO ÚNICO POR TICKER + ANO
-        # Isso garante que o diff() não compare T1/2024 com T4/2023
+        # Cria um grupo único por TICKER + ANO para evitar que o diff() 
+        # compare o T1 de 2024 com o T4 de 2023 (o que geraria falsos negativos)
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         
         # 1. Calcular a diferença DENTRO DO ANO
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
         
-        # 2. Preencher o NaN do primeiro trimestre com o valor YTD
+        # 2. Preencher o NaN do primeiro trimestre com o valor YTD (pois não há anterior no ano)
         df[col_q] = df[col_q].fillna(df[col_ytd])
         
-        # 3. Remover a verificação de negativos que estava matando o T1 erroneamente.
-        # (Retificações negativas raras são melhor ignoradas do que zeradas globalmente)
+        # 3. SANITY CHECK APENAS PARA ERROS DE DADO DA CVM:
+        # Se o próprio YTD for negativo, é quase certamente um erro de classificação da conta na CVM.
+        # Nesse caso específico, anulamos ambos para não poluir o banco com lixo.
+        # (Mas se o YTD for positivo e o _q der negativo, PRESERVAMOS o negativo, pois é uma reversão real).
+        df.loc[df[col_ytd] < 0, col_q] = np.nan
+        df.loc[df[col_ytd] < 0, col_ytd] = np.nan
 
     print(f"✅ Colunas _q calculadas para {len(df)} registros.")
     return df
@@ -188,7 +189,6 @@ def main():
     anos = range(ANO_INICIAL, ANO_FINAL + 1)
     print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL}...")
     
-    # Fase 1: Extrair todos os dados
     for ano in anos:
         print(f"\n📊 Processando {ano}...")
         
@@ -206,14 +206,11 @@ def main():
         print("❌ Nenhum registro extraído. Abortando.")
         return
     
-    # Consolidar todos os DataFrames
     df_consolidado = pd.concat(todos_registros, ignore_index=True)
     print(f"\n📦 Total de {len(df_consolidado)} registros consolidados.")
     
-    # Fase 2: Calcular colunas _q (desacumulador)
     df_consolidado = calcular_colunas_q(df_consolidado)
     
-    # Fase 3: Salvar no banco
     print("💾 Salvando no Supabase...")
     df_consolidado = df_consolidado.replace({np.nan: None, pd.NaT: None})
     registros = df_consolidado.to_dict('records')
@@ -229,7 +226,7 @@ def main():
     
     print(f"\n🏆 CONCLUÍDO! {total_salvos} registros salvos.")
     
-    # Validação: verificar se a soma dos _q bate com o _ytd do T4
+    # Validação automática
     print("\n🔍 Validando desacumulador (amostra PETR4 2024)...")
     validacao = supabase.table("fundamentos_trimestrais").select(
         "ticker, ano, trimestre, receita_liquida_ytd, receita_liquida_q"
@@ -241,9 +238,9 @@ def main():
         soma_q = df_val['receita_liquida_q'].sum()
         ytd_t4 = df_val[df_val['trimestre'] == 4]['receita_liquida_ytd'].iloc[0] if 4 in df_val['trimestre'].values else None
         if ytd_t4:
+            diff = abs(soma_q - ytd_t4)
             print(f"\nSoma dos _q: {soma_q:,.0f}")
             print(f"YTD do T4: {ytd_t4:,.0f}")
-            diff = abs(soma_q - ytd_t4)
             print(f"Diferença: {diff:,.0f} ({'✅ OK' if diff < 1000 else '❌ ERRO'})")
 
 if __name__ == "__main__":
