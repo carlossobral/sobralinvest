@@ -10,7 +10,7 @@ def buscar_fundamentos():
     data = supabase.table("fundamentos_trimestrais").select("*").eq("trimestre", 4).execute().data
     df = pd.DataFrame(data)
     
-    cols_numericas = ['receita_liquida', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido', 
+    cols_numericas = ['receita_liquida_ytd', 'lucro_bruto_ytd', 'ebit_ytd', 'ebitda_ytd', 'lucro_liquido_ytd', 
                       'ativo_total', 'ativo_circulante', 'passivo_circulante', 'patrimonio_liquido', 
                       'divida_liquida', 'quantidade_acoes', 'ano']
     for col in cols_numericas:
@@ -19,7 +19,7 @@ def buscar_fundamentos():
             
     df['ano'] = df['ano'].astype('Int64')
     
-    # FILTRO CRÍTICO: Ignora anos futuros (ex: 2025, 2026)
+    # FILTRO CRÍTICO: Ignora anos futuros
     ano_atual = datetime.now().year
     df = df[df['ano'] <= ano_atual]
     
@@ -90,15 +90,13 @@ def calcular_agregacoes_dividendos(df_div):
 
 def calcular_cagr(df_fund):
     print("🔄 Calculando CAGR 5 anos...")
-    # Como agora temos apenas 1 ano por ticker, precisamos buscar o ano base diretamente no banco
-    # ou assumir que df_fund já tem o histórico. Para manter consistência, vamos recarregar apenas para CAGR.
-    data_hist = supabase.table("fundamentos_trimestrais").select("ticker, ano, receita_liquida, lucro_liquido").eq("trimestre", 4).execute().data
+    data_hist = supabase.table("fundamentos_trimestrais").select("ticker, ano, receita_liquida_ytd, lucro_liquido_ytd").eq("trimestre", 4).execute().data
     df_hist = pd.DataFrame(data_hist)
     if df_hist.empty:
         return pd.DataFrame(columns=['ticker', 'ano', 'cagr_receita_5a', 'cagr_lucro_5a'])
         
     df_hist['ano'] = pd.to_numeric(df_hist['ano'], errors='coerce').astype('Int64')
-    for c in ['receita_liquida', 'lucro_liquido']:
+    for c in ['receita_liquida_ytd', 'lucro_liquido_ytd']:
         df_hist[c] = pd.to_numeric(df_hist[c], errors='coerce')
         
     cagr_data = []
@@ -110,10 +108,10 @@ def calcular_cagr(df_fund):
         reg_base = df_ticker[df_ticker['ano'] == (ano_atual - 5)]
         if reg_base.empty: continue
         
-        rec_atual = df_ticker[df_ticker['ano'] == ano_atual].iloc[0]['receita_liquida']
-        rec_base = reg_base.iloc[0]['receita_liquida']
-        luc_atual = df_ticker[df_ticker['ano'] == ano_atual].iloc[0]['lucro_liquido']
-        luc_base = reg_base.iloc[0]['lucro_liquido']
+        rec_atual = df_ticker[df_ticker['ano'] == ano_atual].iloc[0]['receita_liquida_ytd']
+        rec_base = reg_base.iloc[0]['receita_liquida_ytd']
+        luc_atual = df_ticker[df_ticker['ano'] == ano_atual].iloc[0]['lucro_liquido_ytd']
+        luc_base = reg_base.iloc[0]['lucro_liquido_ytd']
         
         cagr_rec = (rec_atual / rec_base) ** (1/5) - 1 if rec_base > 0 else np.nan
         cagr_luc = (luc_atual / luc_base) ** (1/5) - 1 if luc_base > 0 else np.nan
@@ -142,40 +140,40 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df['volume_medio_diario'] = df['volume_medio_diario'].fillna(0)
     
     # 1. Por Ação
-    df['lpa'] = df['lucro_liquido'] / df['quantidade_acoes']
+    df['lpa'] = df['lucro_liquido_ytd'] / df['quantidade_acoes']
     df['vpa'] = df['patrimonio_liquido'] / df['quantidade_acoes']
     
     # 2. Múltiplos de Mercado
     mc = df['preco_atual'] * df['quantidade_acoes']
     df['p_l'] = df['preco_atual'] / df['lpa']
     df['p_vp'] = df['preco_atual'] / df['vpa']
-    df['p_receita'] = mc / df['receita_liquida']
+    df['p_receita'] = mc / df['receita_liquida_ytd']
     df['p_ativo'] = mc / df['ativo_total']
     df['p_cap_giro'] = mc / (df['ativo_circulante'] - df['passivo_circulante'])
     df['p_ativo_circ_liq'] = df['p_cap_giro']
-    df['p_ebit'] = mc / df['ebit']
-    df['p_ebitda'] = mc / df['ebitda']
+    df['p_ebit'] = mc / df['ebit_ytd']
+    df['p_ebitda'] = mc / df['ebitda_ytd']
     
     ev = mc + df['divida_liquida']
-    df['ev_ebit'] = ev / df['ebit']
-    df['ev_ebitda'] = ev / df['ebitda']
+    df['ev_ebit'] = ev / df['ebit_ytd']
+    df['ev_ebitda'] = ev / df['ebitda_ytd']
     
-    # 3. Rentabilidade e Margens
-    df['roe'] = df['lucro_liquido'] / df['patrimonio_liquido']
-    df['roa'] = df['lucro_liquido'] / df['ativo_total']
-    df['roic'] = (df['ebit'] * (1 - TAXA_IMPOSTO)) / (df['patrimonio_liquido'] + df['divida_liquida'])
-    df['giro_ativos'] = df['receita_liquida'] / df['ativo_total']
+    # 3. Rentabilidade e Margens (Proteção contra divisão por zero ou receita negativa)
+    df['roe'] = df['lucro_liquido_ytd'] / df['patrimonio_liquido']
+    df['roa'] = df['lucro_liquido_ytd'] / df['ativo_total']
+    df['roic'] = (df['ebit_ytd'] * (1 - TAXA_IMPOSTO)) / (df['patrimonio_liquido'] + df['divida_liquida'])
+    df['giro_ativos'] = df['receita_liquida_ytd'] / df['ativo_total']
     
-    df['margem_bruta'] = df['lucro_bruto'] / df['receita_liquida']
-    df['margem_ebit'] = df['ebit'] / df['receita_liquida']
-    df['margem_ebitda'] = df['ebitda'] / df['receita_liquida']
-    df['margem_liquida'] = df['lucro_liquido'] / df['receita_liquida']
+    df['margem_bruta'] = np.where(df['receita_liquida_ytd'] > 0, df['lucro_bruto_ytd'] / df['receita_liquida_ytd'], np.nan)
+    df['margem_ebit'] = np.where(df['receita_liquida_ytd'] > 0, df['ebit_ytd'] / df['receita_liquida_ytd'], np.nan)
+    df['margem_ebitda'] = np.where(df['receita_liquida_ytd'] > 0, df['ebitda_ytd'] / df['receita_liquida_ytd'], np.nan)
+    df['margem_liquida'] = np.where(df['receita_liquida_ytd'] > 0, df['lucro_liquido_ytd'] / df['receita_liquida_ytd'], np.nan)
     
     # 4. Endividamento e Liquidez
     df['div_liq_ativos'] = df['divida_liquida'] / df['ativo_total']
     df['div_liq_pl'] = df['divida_liquida'] / df['patrimonio_liquido']
-    df['div_liq_ebit'] = df['divida_liquida'] / df['ebit']
-    df['div_liq_ebitda'] = df['divida_liquida'] / df['ebitda']
+    df['div_liq_ebit'] = df['divida_liquida'] / df['ebit_ytd']
+    df['div_liq_ebitda'] = df['divida_liquida'] / df['ebitda_ytd']
     df['liquidez_corrente'] = df['ativo_circulante'] / df['passivo_circulante']
     df['passivos_ativos'] = (df['ativo_total'] - df['patrimonio_liquido']) / df['ativo_total']
     df['pl_ativos'] = df['patrimonio_liquido'] / df['ativo_total']
@@ -217,7 +215,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         'roe', 'roa', 'roic', 'giro_ativos', 'margem_bruta', 'margem_ebit', 
         'margem_ebitda', 'margem_liquida', 'liquidez_corrente', 'passivos_ativos', 
         'pl_ativos', 'div_liq_ativos', 'div_liq_pl', 'div_liq_ebit', 'div_liq_ebitda',
-        'cagr_receita_5a', 'cagr_lucro_5a', 'receita_liquida', 'lucro_liquido', 'ebit',
+        'cagr_receita_5a', 'cagr_lucro_5a', 'receita_liquida_ytd', 'lucro_liquido_ytd', 'ebit_ytd',
         'lpa', 'vpa', 'preco_justo_graham', 'graham_upside', 'preco_justo_graham_br', 
         'graham_br_upside', 'preco_justo_bazin', 'bazin_upside', 'preco_justo_lynch', 
         'lynch_upside', 'preco_teto_medio', 'agf_upside', 'pl_absoluto', 
@@ -226,7 +224,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     
     df_saida = df[[c for c in cols_finais if c in df.columns]].replace({np.inf: None, -np.inf: None, np.nan: None})
     
-    # Segurança final contra duplicatas de upsert
+    # CORREÇÃO CRÍTICA: Remove duplicatas exatas de ticker + data_calculo antes do upsert
     df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_calculo'], keep='last')
     
     registros = df_saida.to_dict('records')
