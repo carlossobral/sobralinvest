@@ -6,7 +6,7 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-# CONFIGURAÇÃO DE RANGE DINÂMICO (Ajustado para 2019 conforme solicitado)
+# CONFIGURAÇÃO DE RANGE DINÂMICO
 ANO_INICIAL = 2019  
 ANO_FINAL = datetime.now().year  
 
@@ -115,7 +115,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             
         df_pivot['divida_liquida'] = df_pivot.get('divida_bruta', 0) - df_pivot.get('caixa', 0)
         
-        # Renomear colunas da DRE para _ytd (mantendo o dado original acumulado)
+        # Renomear colunas da DRE para _ytd
         for col in COLUNAS_DRE:
             if col in df_pivot.columns:
                 df_pivot[f'{col}_ytd'] = df_pivot[col]
@@ -146,14 +146,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 def calcular_colunas_q(df):
     """
     Calcula as colunas _q (isoladas do trimestre) subtraindo o balanço anterior.
-    CORREÇÃO: Para o primeiro registro de cada ticker, coluna_q = coluna_ytd (pois não há anterior).
+    LÓGICA DEFINITIVA: diff() gera NaN no primeiro registro. fillna preenche com o próprio _ytd.
     """
     print("🧮 Calculando colunas _q (desacumulador)...")
     
-    # Ordenar por ticker e data_referencia para garantir a ordem cronológica
-    df = df.sort_values(['ticker', 'data_referencia'])
+    # Ordenar e resetar índice para garantir manipulação segura
+    df = df.sort_values(['ticker', 'data_referencia']).reset_index(drop=True)
     
-    # Para cada coluna da DRE, calcular a diferença
     for col_base in COLUNAS_DRE:
         col_ytd = f'{col_base}_ytd'
         col_q = f'{col_base}_q'
@@ -161,14 +160,13 @@ def calcular_colunas_q(df):
         if col_ytd not in df.columns:
             continue
         
-        # Calcular a diferença dentro de cada ticker (atual - anterior)
+        # 1. Calcular a diferença (o primeiro registro de cada ticker será NaN)
         df[col_q] = df.groupby('ticker')[col_ytd].diff()
         
-        # CORREÇÃO APLICADA: Para o primeiro registro de cada ticker, manter o valor ytd
-        first_records = df.groupby('ticker').head(1).index
-        df.loc[first_records, col_q] = df.loc[first_records, col_ytd]
+        # 2. CORREÇÃO DEFINITIVA: Preencher o NaN do primeiro registro com o valor _ytd
+        df[col_q] = df[col_q].fillna(df[col_ytd])
         
-        # Se a diferença for negativa (erro de dados ou retificação estranha), deixar NULL
+        # 3. Se a diferença for negativa (erro de dados), forçar NaN
         df.loc[df[col_q] < 0, col_q] = np.nan
     
     print(f"✅ Colunas _q calculadas para {len(df)} registros.")
