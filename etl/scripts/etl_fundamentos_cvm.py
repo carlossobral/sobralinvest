@@ -6,26 +6,26 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-# FORÇAR APENAS ANOS FECHADOS E AUDITADOS (Ignora projeções/erros de 2025/2026 da CVM)
 ANO_INICIAL = 2019  
-ANO_FINAL = 2026
+ANO_FINAL = datetime.now().year  
 
+# REGEX BLINDADO: Apenas códigos de conta oficiais. 
+# Remove fallbacks de texto que causam soma indevida de sub-contas (ex: ITUB4 PL).
 MAPEAMENTO = {
-    'receita_liquida': r'(?i)^3\.01$|^3\.01\.00$|receita.de.intermedia..o.financeira|receita.de.venda.de.bens',
-    'lucro_bruto': r'(?i)^3\.03$|^3\.03\.00$|resultado.bruto',
-    'ebit': r'(?i)^3\.05$|^3\.05\.00$|resultado.antes.do.resultado.financeiro.e.dos.tributos',
-    'depreciacao_amortizacao': r'(?i)^3\.05\.03$|^3\.05\.04$|deprecia|amortiza',
-    'lucro_liquido': r'(?i)^3\.11$|^3\.11\.00$|lucro.preju.zo.consolidado.do.per.odo',
-    'ativo_total': r'(?i)^1\.01$|^1\.01\.00$|total.do.ativo',
-    'ativo_circulante': r'(?i)^1\.01\.01$|^1\.01\.01\.00$|ativo.circulante',
-    'passivo_circulante': r'(?i)^2\.01$|^2\.01\.00$|passivo.circulante',
-    'patrimonio_liquido': r'(?i)^2\.03$|^2\.03\.00$|patrim.nio.l.quido.consolidado',
-    'caixa': r'(?i)^1\.01\.01\.01$|^1\.01\.01\.01\.00$|caixa.e.equivalentes|disponibilidades',
-    'divida_bruta': r'(?i)^2\.02$|^2\.02\.00$|debentures|empr.stimos.e.financiamentos'
+    'receita_liquida': r'(?i)^3\.01$|^3\.01\.00$',
+    'lucro_bruto': r'(?i)^3\.03$|^3\.03\.00$',
+    'ebit': r'(?i)^3\.05$|^3\.05\.00$',
+    'depreciacao_amortizacao': r'(?i)^3\.05\.03$|^3\.05\.04$',
+    'lucro_liquido': r'(?i)^3\.11$|^3\.11\.00$',
+    'ativo_total': r'(?i)^1\.01$|^1\.01\.00$',
+    'ativo_circulante': r'(?i)^1\.01\.01$|^1\.01\.01\.00$',
+    'passivo_circulante': r'(?i)^2\.01$|^2\.01\.00$',
+    'patrimonio_liquido': r'(?i)^2\.03$|^2\.03\.00$', # Apenas o código exato
+    'caixa': r'(?i)^1\.01\.01\.01$|^1\.01\.01\.01\.00$',
+    'divida_bruta': r'(?i)^2\.02$|^2\.02\.00$'
 }
 
 COLUNAS_DRE = ['receita_liquida', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
-# Colunas financeiras que vêm em MILHARES na CVM e precisam ser multiplicadas por 1000
 COLUNAS_FINANCEIRAS = COLUNAS_DRE + ['ativo_total', 'ativo_circulante', 'passivo_circulante', 
                                       'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida']
 
@@ -33,8 +33,7 @@ def obter_dados_empresas():
     print("🔄 Buscando dados da tabela empresas...")
     emp_data = supabase.table("empresas").select("ticker, cd_cvm, quantidade_acoes").not_.is_("cd_cvm", "null").execute().data
     
-    mapa_tickers = {}
-    mapa_acoes = {}
+    mapa_tickers, mapa_acoes = {}, {}
     for e in emp_data:
         if e.get('cd_cvm'):
             cd_cvm_str = str(int(e['cd_cvm']))
@@ -45,46 +44,35 @@ def obter_dados_empresas():
     return mapa_tickers, mapa_acoes
 
 def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
-    if ano > ANO_FINAL:
-        return pd.DataFrame()
+    if ano > ANO_FINAL: return pd.DataFrame()
 
     url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/{tipo_doc.lower()}_cia_aberta_{ano}.zip"
     
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
-        if r.status_code != 200: 
-            return pd.DataFrame()
+        if r.status_code != 200: return pd.DataFrame()
         
         dados_finais = []
         with ZipFile(BytesIO(r.content)) as z:
             arquivos_consolidados = [n for n in z.namelist() if '_con_' in n.lower() or 'consolidado' in n.lower()]
-            if not arquivos_consolidados:
-                return pd.DataFrame()
+            if not arquivos_consolidados: return pd.DataFrame()
 
             for nome in arquivos_consolidados:
                 df = pd.read_csv(z.open(nome), sep=';', decimal=',', encoding='latin1')
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
                 for conta_padrao, regex in MAPEAMENTO.items():
-                    df_filtrado = df[
-                        df['CD_CONTA'].astype(str).str.match(regex, na=False) | 
-                        df['DS_CONTA'].str.contains(regex, na=False, regex=True)
-                    ]
+                    # Match estrito no código da conta
+                    df_filtrado = df[df['CD_CONTA'].astype(str).str.match(regex, na=False)]
                     if not df_filtrado.empty:
                         agg = df_filtrado.groupby(['CD_CVM', 'DT_REFER'])['valor'].sum().reset_index()
                         agg['conta'] = conta_padrao
                         dados_finais.append(agg)
                         
-        if not dados_finais: 
-            return pd.DataFrame()
+        if not dados_finais: return pd.DataFrame()
         
         df_final = pd.concat(dados_finais)
-        df_pivot = df_final.pivot_table(
-            index=['CD_CVM', 'DT_REFER'], 
-            columns='conta', 
-            values='valor', 
-            aggfunc='sum'
-        ).reset_index()
+        df_pivot = df_final.pivot_table(index=['CD_CVM', 'DT_REFER'], columns='conta', values='valor', aggfunc='sum').reset_index()
         
         if 'ebit' in df_pivot.columns and 'depreciacao_amortizacao' in df_pivot.columns:
             df_pivot['ebitda'] = df_pivot['ebit'] + df_pivot['depreciacao_amortizacao']
@@ -106,7 +94,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         else:
             df_pivot['trimestre'] = 4
             
-        # CORREÇÃO CRÍTICA: Converter de MILHARES para REAIS
+        # Converter de MILHARES para REAIS
         for col in COLUNAS_FINANCEIRAS:
             if col in df_pivot.columns:
                 df_pivot[col] = df_pivot[col] * 1000
@@ -120,8 +108,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         
         cols = ['ticker', 'ano', 'trimestre', 'data_referencia']
         cols += [f'{col}_ytd' for col in COLUNAS_DRE if f'{col}_ytd' in df_pivot.columns]
-        cols += ['ativo_total', 'ativo_circulante', 'passivo_circulante', 
-                 'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida', 'quantidade_acoes']
+        cols += ['ativo_total', 'ativo_circulante', 'passivo_circulante', 'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida', 'quantidade_acoes']
         
         df_final = df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None})
         
@@ -155,12 +142,12 @@ def calcular_colunas_q(df):
     return df
 
 def main():
-    print("🔄 Iniciando carga de fundamentos (Correção Definitiva: x1000 + Ano 2024)...")
+    print("🔄 Iniciando carga de fundamentos (Regex Blindado por Código de Conta)...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
     if not mapa_tickers: return
 
     todos_registros = []
-    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL} (Dados Auditados)...")
+    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL}...")
     
     for ano in range(ANO_INICIAL, ANO_FINAL + 1):
         print(f"\n📊 Processando {ano}...")
@@ -189,15 +176,6 @@ def main():
         total_salvos += len(registros[i:i+100])
     
     print(f"\n🏆 CONCLUÍDO! {total_salvos} registros salvos.")
-    
-    # Validação
-    print("\n🔍 Validando (PETR4 2024 em Bilhões)...")
-    val = supabase.table("fundamentos_trimestrais").select("ticker, ano, trimestre, receita_liquida_ytd, receita_liquida_q").eq("ticker", "PETR4").eq("ano", 2024).execute().data
-    if val:
-        df_val = pd.DataFrame(val)
-        df_val['receita_liquida_ytd_bi'] = df_val['receita_liquida_ytd'] / 1e9
-        df_val['receita_liquida_q_bi'] = df_val['receita_liquida_q'] / 1e9
-        print(df_val[['ticker', 'ano', 'trimestre', 'receita_liquida_ytd_bi', 'receita_liquida_q_bi']])
 
 if __name__ == "__main__":
     main()
