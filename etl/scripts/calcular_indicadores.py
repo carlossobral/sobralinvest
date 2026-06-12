@@ -19,23 +19,22 @@ def buscar_fundamentos():
             
     df['ano'] = df['ano'].astype('Int64')
     
-    # FILTRO DE SANIDADE: Só considera anos com dados válidos
-    # (receita > 0, lucro não nulo, patrimônio > 0)
-    df = df[
+    # FILTRO DE SANIDADE: Remove anos com dados corrompidos (NaN ou <= 0)
+    df_valido = df[
         (df['receita_liquida_ytd'] > 0) & 
         (df['lucro_liquido_ytd'].notna()) &
         (df['patrimonio_liquido'] > 0)
-    ]
+    ].copy()
     
     # Ignora anos futuros absurdos
     ano_atual = datetime.now().year
-    df = df[df['ano'] <= ano_atual]
+    df_valido = df_valido[df_valido['ano'] <= ano_atual]
     
     # Pega o último ano VÁLIDO por ticker (ordenado decrescente)
-    df = df.sort_values('ano', ascending=False).drop_duplicates(subset=['ticker'], keep='first')
+    df_final = df_valido.sort_values('ano', ascending=False).drop_duplicates(subset=['ticker'], keep='first')
     
-    print(f"✅ {len(df)} tickers carregados (último ano válido: {df['ano'].max()}).")
-    return df
+    print(f"✅ {len(df_final)} tickers carregados (último ano válido: {df_final['ano'].max()}).")
+    return df_final
 
 def buscar_cotacoes():
     print("🔄 Buscando cotações recentes (últimos 30 dias)...")
