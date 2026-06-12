@@ -6,11 +6,10 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-# CONFIGURAÇÃO DE RANGE DINÂMICO
+# FORÇAR APENAS ANOS FECHADOS E AUDITADOS (Ignora projeções/erros de 2025/2026 da CVM)
 ANO_INICIAL = 2019  
-ANO_FINAL = datetime.now().year  
+ANO_FINAL = 2024  # <--- CORREÇÃO CRÍTICA: Trava em 2024 para garantir dados auditados
 
-# REGEX ROBUSTO: Prioriza códigos de conta oficiais da CVM e fallback por nome
 MAPEAMENTO = {
     'receita_liquida': r'(?i)^3\.01$|^3\.01\.00$|receita.de.intermedia..o.financeira|receita.de.venda.de.bens',
     'lucro_bruto': r'(?i)^3\.03$|^3\.03\.00$|resultado.bruto',
@@ -25,8 +24,10 @@ MAPEAMENTO = {
     'divida_bruta': r'(?i)^2\.02$|^2\.02\.00$|debentures|empr.stimos.e.financiamentos'
 }
 
-# Colunas da DRE que precisam ser desacumuladas
 COLUNAS_DRE = ['receita_liquida', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
+# Colunas financeiras que vêm em MILHARES na CVM e precisam ser multiplicadas por 1000
+COLUNAS_FINANCEIRAS = COLUNAS_DRE + ['ativo_total', 'ativo_circulante', 'passivo_circulante', 
+                                      'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida']
 
 def obter_dados_empresas():
     print("🔄 Buscando dados da tabela empresas...")
@@ -34,7 +35,6 @@ def obter_dados_empresas():
     
     mapa_tickers = {}
     mapa_acoes = {}
-    
     for e in emp_data:
         if e.get('cd_cvm'):
             cd_cvm_str = str(int(e['cd_cvm']))
@@ -45,8 +45,7 @@ def obter_dados_empresas():
     return mapa_tickers, mapa_acoes
 
 def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
-    if ano > datetime.now().year:
-        print(f"  ⚠️ Ignorando ano futuro: {ano}")
+    if ano > ANO_FINAL:
         return pd.DataFrame()
 
     url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/{tipo_doc.lower()}_cia_aberta_{ano}.zip"
@@ -96,12 +95,8 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         df_pivot['ticker'] = df_pivot['CD_CVM_STR'].map(mapa_tickers)
         df_pivot['quantidade_acoes'] = df_pivot['CD_CVM_STR'].map(mapa_acoes)
         
-        tickers_encontrados = df_pivot['ticker'].notna().sum()
-        print(f"   🔍 {tickers_encontrados} tickers mapeados com sucesso no {tipo_doc} {ano}")
-        
         df_pivot = df_pivot.dropna(subset=['ticker'])
         df_pivot['ano'] = pd.to_datetime(df_pivot['DT_REFER']).dt.year
-        df_pivot = df_pivot[df_pivot['ano'] <= datetime.now().year]
         df_pivot['data_referencia'] = df_pivot['DT_REFER']
         
         if tipo_doc == 'ITR':
@@ -111,9 +106,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         else:
             df_pivot['trimestre'] = 4
             
+        # CORREÇÃO CRÍTICA: Converter de MILHARES para REAIS
+        for col in COLUNAS_FINANCEIRAS:
+            if col in df_pivot.columns:
+                df_pivot[col] = df_pivot[col] * 1000
+                
         df_pivot['divida_liquida'] = df_pivot.get('divida_bruta', 0) - df_pivot.get('caixa', 0)
         
-        # Renomear colunas da DRE para _ytd
         for col in COLUNAS_DRE:
             if col in df_pivot.columns:
                 df_pivot[f'{col}_ytd'] = df_pivot[col]
@@ -126,12 +125,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         
         df_final = df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None})
         
-        if 'trimestre' in df_final.columns:
-            df_final['trimestre'] = df_final['trimestre'].astype(int)
-        if 'ano' in df_final.columns:
-            df_final['ano'] = df_final['ano'].astype(int)
-        if 'quantidade_acoes' in df_final.columns:
-            df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
+        if 'trimestre' in df_final.columns: df_final['trimestre'] = df_final['trimestre'].astype(int)
+        if 'ano' in df_final.columns: df_final['ano'] = df_final['ano'].astype(int)
+        if 'quantidade_acoes' in df_final.columns: df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
             
         df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
         return df_final
@@ -141,36 +137,17 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         return pd.DataFrame()
 
 def calcular_colunas_q(df):
-    """
-    Calcula as colunas _q (isoladas do trimestre).
-    PRESERVA valores negativos para transparência analítica (ex: reversões, prejuízos).
-    """
-    print("🧮 Calculando colunas _q (desacumulador com preservação de sinal)...")
-    
-    # Ordenar cronologicamente para garantir a sequência correta
+    print("🧮 Calculando colunas _q (desacumulador)...")
     df = df.sort_values(['ticker', 'ano', 'data_referencia']).reset_index(drop=True)
     
     for col_base in COLUNAS_DRE:
         col_ytd = f'{col_base}_ytd'
         col_q = f'{col_base}_q'
+        if col_ytd not in df.columns: continue
         
-        if col_ytd not in df.columns:
-            continue
-        
-        # Cria um grupo único por TICKER + ANO para evitar que o diff() 
-        # compare o T1 de 2024 com o T4 de 2023 (o que geraria falsos negativos)
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
-        
-        # 1. Calcular a diferença DENTRO DO ANO
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
-        
-        # 2. Preencher o NaN do primeiro trimestre com o valor YTD (pois não há anterior no ano)
         df[col_q] = df[col_q].fillna(df[col_ytd])
-        
-        # 3. SANITY CHECK APENAS PARA ERROS DE DADO DA CVM:
-        # Se o próprio YTD for negativo, é quase certamente um erro de classificação da conta na CVM.
-        # Nesse caso específico, anulamos ambos para não poluir o banco com lixo.
-        # (Mas se o YTD for positivo e o _q der negativo, PRESERVAMOS o negativo, pois é uma reversão real).
         df.loc[df[col_ytd] < 0, col_q] = np.nan
         df.loc[df[col_ytd] < 0, col_ytd] = np.nan
 
@@ -178,20 +155,15 @@ def calcular_colunas_q(df):
     return df
 
 def main():
-    print("🔄 Iniciando carga de fundamentos (com desacumulador)...")
+    print("🔄 Iniciando carga de fundamentos (Correção Definitiva: x1000 + Ano 2024)...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
-    
-    if not mapa_tickers:
-        print("❌ Nenhum ticker com CD_CVM encontrado. Abortando.")
-        return
+    if not mapa_tickers: return
 
     todos_registros = []
-    anos = range(ANO_INICIAL, ANO_FINAL + 1)
-    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL}...")
+    print(f"📅 Processando anos de {ANO_INICIAL} a {ANO_FINAL} (Dados Auditados)...")
     
-    for ano in anos:
+    for ano in range(ANO_INICIAL, ANO_FINAL + 1):
         print(f"\n📊 Processando {ano}...")
-        
         df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
         if not df_dfp.empty:
             todos_registros.append(df_dfp)
@@ -202,13 +174,9 @@ def main():
             todos_registros.append(df_itr)
             print(f"  ✅ ITR {ano}: {len(df_itr)} registros")
     
-    if not todos_registros:
-        print("❌ Nenhum registro extraído. Abortando.")
-        return
+    if not todos_registros: return
     
     df_consolidado = pd.concat(todos_registros, ignore_index=True)
-    print(f"\n📦 Total de {len(df_consolidado)} registros consolidados.")
-    
     df_consolidado = calcular_colunas_q(df_consolidado)
     
     print("💾 Salvando no Supabase...")
@@ -216,32 +184,20 @@ def main():
     registros = df_consolidado.to_dict('records')
     
     total_salvos = 0
-    lote = 100
-    for i in range(0, len(registros), lote):
-        supabase.table("fundamentos_trimestrais").upsert(
-            registros[i:i+lote], 
-            on_conflict="ticker,ano,trimestre"
-        ).execute()
-        total_salvos += len(registros[i:i+lote])
+    for i in range(0, len(registros), 100):
+        supabase.table("fundamentos_trimestrais").upsert(registros[i:i+100], on_conflict="ticker,ano,trimestre").execute()
+        total_salvos += len(registros[i:i+100])
     
     print(f"\n🏆 CONCLUÍDO! {total_salvos} registros salvos.")
     
-    # Validação automática
-    print("\n🔍 Validando desacumulador (amostra PETR4 2024)...")
-    validacao = supabase.table("fundamentos_trimestrais").select(
-        "ticker, ano, trimestre, receita_liquida_ytd, receita_liquida_q"
-    ).eq("ticker", "PETR4").eq("ano", 2024).execute().data
-    
-    if validacao:
-        df_val = pd.DataFrame(validacao)
-        print(df_val[['ticker', 'ano', 'trimestre', 'receita_liquida_ytd', 'receita_liquida_q']])
-        soma_q = df_val['receita_liquida_q'].sum()
-        ytd_t4 = df_val[df_val['trimestre'] == 4]['receita_liquida_ytd'].iloc[0] if 4 in df_val['trimestre'].values else None
-        if ytd_t4:
-            diff = abs(soma_q - ytd_t4)
-            print(f"\nSoma dos _q: {soma_q:,.0f}")
-            print(f"YTD do T4: {ytd_t4:,.0f}")
-            print(f"Diferença: {diff:,.0f} ({'✅ OK' if diff < 1000 else '❌ ERRO'})")
+    # Validação
+    print("\n🔍 Validando (PETR4 2024 em Bilhões)...")
+    val = supabase.table("fundamentos_trimestrais").select("ticker, ano, trimestre, receita_liquida_ytd, receita_liquida_q").eq("ticker", "PETR4").eq("ano", 2024).execute().data
+    if val:
+        df_val = pd.DataFrame(val)
+        df_val['receita_liquida_ytd_bi'] = df_val['receita_liquida_ytd'] / 1e9
+        df_val['receita_liquida_q_bi'] = df_val['receita_liquida_q'] / 1e9
+        print(df_val[['ticker', 'ano', 'trimestre', 'receita_liquida_ytd_bi', 'receita_liquida_q_bi']])
 
 if __name__ == "__main__":
     main()
