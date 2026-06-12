@@ -19,15 +19,22 @@ def buscar_fundamentos():
             
     df['ano'] = df['ano'].astype('Int64')
     
-    # FILTRO: Ignora anos futuros absurdos (ex: erro de digitação da CVM como 2099)
+    # FILTRO DE SANIDADE: Só considera anos com dados válidos
+    # (receita > 0, lucro não nulo, patrimônio > 0)
+    df = df[
+        (df['receita_liquida_ytd'] > 0) & 
+        (df['lucro_liquido_ytd'].notna()) &
+        (df['patrimonio_liquido'] > 0)
+    ]
+    
+    # Ignora anos futuros absurdos
     ano_atual = datetime.now().year
     df = df[df['ano'] <= ano_atual]
     
-    # CORREÇÃO INTELIGENTE: Ordena do mais recente para o mais antigo.
-    # Assim, ele pega o último DFP disponível (ex: 2025). Se não existir, cai para 2024.
+    # Pega o último ano VÁLIDO por ticker (ordenado decrescente)
     df = df.sort_values('ano', ascending=False).drop_duplicates(subset=['ticker'], keep='first')
     
-    print(f"✅ {len(df)} tickers carregados (último ano disponível: {df['ano'].max()}).")
+    print(f"✅ {len(df)} tickers carregados (último ano válido: {df['ano'].max()}).")
     return df
 
 def buscar_cotacoes():
