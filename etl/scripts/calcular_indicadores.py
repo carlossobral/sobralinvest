@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from etl.database.supabase_client import supabase
 
 TAXA_IMPOSTO = 0.34
+ANO_MAXIMO_VALIDO = 2024 # Garante uso apenas de dados auditados
 
 def buscar_fundamentos():
     print("🔄 Buscando fundamentos anuais (T4)...")
@@ -19,47 +20,35 @@ def buscar_fundamentos():
             
     df['ano'] = df['ano'].astype('Int64')
     
-    # FILTRO CRÍTICO: Ignora anos futuros
-    ano_atual = datetime.now().year
-    df = df[df['ano'] <= ano_atual]
-    
-    # Mantém APENAS o último ano válido reportado por ticker
+    # FILTRO CRÍTICO: Ignora anos futuros ou não auditados
+    df = df[df['ano'] <= ANO_MAXIMO_VALIDO]
     df = df.sort_values('ano').drop_duplicates(subset=['ticker'], keep='last')
     
-    print(f"✅ {len(df)} tickers carregados (último ano válido: {df['ano'].max()}).")
+    print(f"✅ {len(df)} tickers carregados (último ano auditado: {df['ano'].max()}).")
     return df
 
 def buscar_cotacoes():
     print("🔄 Buscando cotações recentes (últimos 30 dias)...")
     data_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-    
     try:
         response = supabase.table("cotacoes").select("ticker, data, fechamento, volume").gte("data", data_limite).execute()
         data = response.data
-        
-        if not data:
-            print("⚠️ Nenhuma cotação encontrada nos últimos 30 dias.")
-            return pd.DataFrame()
+        if not data: return pd.DataFrame()
             
         df = pd.DataFrame(data)
         df['fechamento'] = pd.to_numeric(df['fechamento'], errors='coerce')
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
         df['data'] = pd.to_datetime(df['data'])
-        
         df['volume_financeiro'] = df['volume'] * df['fechamento']
         
-        latest_prices = df.sort_values('data').drop_duplicates(subset=['ticker'], keep='last')[['ticker', 'fechamento']]
-        latest_prices = latest_prices.rename(columns={'fechamento': 'preco_atual'})
-        
-        avg_volume = df.groupby('ticker')['volume_financeiro'].mean().reset_index()
-        avg_volume = avg_volume.rename(columns={'volume_financeiro': 'volume_medio_diario'})
+        latest_prices = df.sort_values('data').drop_duplicates(subset=['ticker'], keep='last')[['ticker', 'fechamento']].rename(columns={'fechamento': 'preco_atual'})
+        avg_volume = df.groupby('ticker')['volume_financeiro'].mean().reset_index().rename(columns={'volume_financeiro': 'volume_medio_diario'})
         
         df_cot = latest_prices.merge(avg_volume, on='ticker', how='inner')
-        print(f"✅ {len(df_cot)} cotações processadas em memória com sucesso.")
+        print(f"✅ {len(df_cot)} cotações processadas.")
         return df_cot
-        
     except Exception as e:
-        print(f"❌ Erro ao buscar cotações: {e}")
+        print(f"❌ Erro cotações: {e}")
         return pd.DataFrame()
 
 def buscar_dividendos():
@@ -76,7 +65,6 @@ def buscar_dividendos():
 def calcular_agregacoes_dividendos(df_div):
     if df_div.empty:
         return pd.DataFrame(columns=['ticker', 'dividendos_12m']), pd.DataFrame(columns=['ticker', 'dividendos_6a_media'])
-        
     hoje = datetime.now()
     div_12m = df_div[df_div['data_pagamento'] >= (hoje - timedelta(days=365))].groupby('ticker')['valor'].sum().reset_index()
     div_12m.columns = ['ticker', 'dividendos_12m']
@@ -85,19 +73,16 @@ def calcular_agregacoes_dividendos(df_div):
     div_6a['ano'] = div_6a['data_pagamento'].dt.year
     media_6a = div_6a.groupby(['ticker', 'ano'])['valor'].sum().groupby('ticker').mean().reset_index()
     media_6a.columns = ['ticker', 'dividendos_6a_media']
-
     return div_12m, media_6a
 
 def calcular_cagr(df_fund):
     print("🔄 Calculando CAGR 5 anos...")
     data_hist = supabase.table("fundamentos_trimestrais").select("ticker, ano, receita_liquida_ytd, lucro_liquido_ytd").eq("trimestre", 4).execute().data
     df_hist = pd.DataFrame(data_hist)
-    if df_hist.empty:
-        return pd.DataFrame(columns=['ticker', 'ano', 'cagr_receita_5a', 'cagr_lucro_5a'])
+    if df_hist.empty: return pd.DataFrame(columns=['ticker', 'ano', 'cagr_receita_5a', 'cagr_lucro_5a'])
         
     df_hist['ano'] = pd.to_numeric(df_hist['ano'], errors='coerce').astype('Int64')
-    for c in ['receita_liquida_ytd', 'lucro_liquido_ytd']:
-        df_hist[c] = pd.to_numeric(df_hist[c], errors='coerce')
+    for c in ['receita_liquida_ytd', 'lucro_liquido_ytd']: df_hist[c] = pd.to_numeric(df_hist[c], errors='coerce')
         
     cagr_data = []
     for ticker in df_fund['ticker'].unique():
@@ -115,9 +100,7 @@ def calcular_cagr(df_fund):
         
         cagr_rec = (rec_atual / rec_base) ** (1/5) - 1 if rec_base > 0 else np.nan
         cagr_luc = (luc_atual / luc_base) ** (1/5) - 1 if luc_base > 0 else np.nan
-        
         cagr_data.append({'ticker': ticker, 'ano': ano_atual, 'cagr_receita_5a': cagr_rec, 'cagr_lucro_5a': cagr_luc})
-        
     return pd.DataFrame(cagr_data)
 
 def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
@@ -126,7 +109,6 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         return
 
     print("🧮 Calculando indicadores e valuations...")
-    
     df = df_fund.merge(df_cot, on='ticker', how='left')
     df = df.merge(df_div_12m, on='ticker', how='left')
     df = df.merge(df_div_6a, on='ticker', how='left')
@@ -139,11 +121,9 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     
     df['volume_medio_diario'] = df['volume_medio_diario'].fillna(0)
     
-    # 1. Por Ação
     df['lpa'] = df['lucro_liquido_ytd'] / df['quantidade_acoes']
     df['vpa'] = df['patrimonio_liquido'] / df['quantidade_acoes']
     
-    # 2. Múltiplos de Mercado
     mc = df['preco_atual'] * df['quantidade_acoes']
     df['p_l'] = df['preco_atual'] / df['lpa']
     df['p_vp'] = df['preco_atual'] / df['vpa']
@@ -158,7 +138,6 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df['ev_ebit'] = ev / df['ebit_ytd']
     df['ev_ebitda'] = ev / df['ebitda_ytd']
     
-    # 3. Rentabilidade e Margens (Proteção contra divisão por zero ou receita negativa)
     df['roe'] = df['lucro_liquido_ytd'] / df['patrimonio_liquido']
     df['roa'] = df['lucro_liquido_ytd'] / df['ativo_total']
     df['roic'] = (df['ebit_ytd'] * (1 - TAXA_IMPOSTO)) / (df['patrimonio_liquido'] + df['divida_liquida'])
@@ -169,7 +148,6 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df['margem_ebitda'] = np.where(df['receita_liquida_ytd'] > 0, df['ebitda_ytd'] / df['receita_liquida_ytd'], np.nan)
     df['margem_liquida'] = np.where(df['receita_liquida_ytd'] > 0, df['lucro_liquido_ytd'] / df['receita_liquida_ytd'], np.nan)
     
-    # 4. Endividamento e Liquidez
     df['div_liq_ativos'] = df['divida_liquida'] / df['ativo_total']
     df['div_liq_pl'] = df['divida_liquida'] / df['patrimonio_liquido']
     df['div_liq_ebit'] = df['divida_liquida'] / df['ebit_ytd']
@@ -178,28 +156,18 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df['passivos_ativos'] = (df['ativo_total'] - df['patrimonio_liquido']) / df['ativo_total']
     df['pl_ativos'] = df['patrimonio_liquido'] / df['ativo_total']
     
-    # 5. Dividend Yield
     df['dy_atual'] = df['dividendos_12m'] / df['preco_atual']
     
-    # 6. Valuation (Preços Justos)
     df['preco_justo_graham'] = np.sqrt(np.maximum(0, 22.5 * df['lpa'] * df['vpa']))
     df['preco_justo_graham_br'] = np.sqrt(np.maximum(0, 15 * df['lpa'] * df['vpa']))
     df['preco_justo_bazin'] = df['dividendos_12m'] / 0.06
-    
-    df['preco_justo_lynch'] = np.where(
-        (df['cagr_lucro_5a'] > 0) & (df['cagr_lucro_5a'] <= 0.50),
-        df['lpa'] * (df['cagr_lucro_5a'] * 100),
-        np.nan
-    )
-    
+    df['preco_justo_lynch'] = np.where((df['cagr_lucro_5a'] > 0) & (df['cagr_lucro_5a'] <= 0.50), df['lpa'] * (df['cagr_lucro_5a'] * 100), np.nan)
     df['preco_teto_medio'] = df['dividendos_6a_media'] / 0.06
     
-    # 7. Upsides (%)
     for metodo in ['graham', 'graham_br', 'bazin', 'lynch']:
         df[f'{metodo}_upside'] = ((df[f'preco_justo_{metodo}'] / df['preco_atual']) - 1) * 100
     df['agf_upside'] = ((df['preco_teto_medio'] / df['preco_atual']) - 1) * 100
     
-    # 8. Dados Absolutos e Metadados
     df['pl_absoluto'] = df['patrimonio_liquido']
     df['data_calculo'] = datetime.now().date().isoformat()
     if 'data_referencia' in df.columns:
@@ -207,7 +175,6 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     else:
         df['data_balanco'] = None
     
-    # Lista final de colunas (usando os nomes originais do schema da tabela indicadores)
     cols_finais = [
         'ticker', 'ano', 'data_calculo', 'data_balanco', 'preco_atual',
         'dy_atual', 'p_l', 'p_vp', 'p_receita', 'p_ativo', 'p_cap_giro', 
@@ -222,34 +189,23 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         'dividendos_12m', 'dividendos_6a_media', 'volume_medio_diario'
     ]
     
-    # Filtra apenas colunas que existem no DataFrame
     df_saida = df[[c for c in cols_finais if c in df.columns]].replace({np.inf: None, -np.inf: None, np.nan: None})
-    
-    # CORREÇÃO CRÍTICA: Renomeia as colunas _ytd para os nomes originais esperados pelo banco
     df_saida = df_saida.rename(columns={
         'receita_liquida_ytd': 'receita_liquida',
         'lucro_liquido_ytd': 'lucro_liquido',
         'ebit_ytd': 'ebit'
     })
-    
-    # Remove duplicatas exatas de ticker + data_calculo antes do upsert
     df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_calculo'], keep='last')
-    
     registros = df_saida.to_dict('records')
     
     print(f"💾 Salvando {len(registros)} registros no Supabase...")
     if registros:
-        lote = 100
-        for i in range(0, len(registros), lote):
-            supabase.table("indicadores").upsert(
-                registros[i:i+lote], 
-                on_conflict="ticker,data_calculo"
-            ).execute()
+        for i in range(0, len(registros), 100):
+            supabase.table("indicadores").upsert(registros[i:i+100], on_conflict="ticker,data_calculo").execute()
         print("✅ Salvamento concluído.")
 
 def main():
-    print("🚀 Iniciando Motor de Indicadores (Fase 2 - Versão Final)...")
-    
+    print("🚀 Iniciando Motor de Indicadores (Correção Definitiva: Ano 2024)...")
     df_fund = buscar_fundamentos()
     if df_fund.empty: 
         print("❌ Sem fundamentos. Abortando.")
@@ -257,10 +213,8 @@ def main():
         
     df_cot = buscar_cotacoes()
     df_div = buscar_dividendos()
-    
     df_div_12m, df_div_6a = calcular_agregacoes_dividendos(df_div)
     df_cagr = calcular_cagr(df_fund)
-    
     calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr)
     print("\n🏆 CONCLUÍDO! Fase 2 finalizada com sucesso.")
 
