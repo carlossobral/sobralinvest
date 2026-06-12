@@ -9,19 +9,22 @@ TAXA_IMPOSTO = 0.34
 
 
 def buscar_fundamentos() -> pd.DataFrame:
-    """
-    Busca todos os trimestres e monta LTM (Last Twelve Months) por ticker.
-    DRE: soma dos _q dos ultimos 4 trimestres disponíveis.
-    Balanco: valores do trimestre mais recente.
-    """
     print("Buscando fundamentos (todos os trimestres)...")
 
-    data = (
-        supabase.table("fundamentos_trimestrais")
-        .select("*")
-        .execute()
-        .data
-    )
+    data = []
+    offset = 0
+    while True:
+        chunk = (
+            supabase.table("fundamentos_trimestrais")
+            .select("*")
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        data.extend(chunk)
+        if len(chunk) < 1000:
+            break
+        offset += 1000
 
     if not data:
         return pd.DataFrame()
@@ -43,30 +46,28 @@ def buscar_fundamentos() -> pd.DataFrame:
     df["data_referencia"] = pd.to_datetime(df["data_referencia"], errors="coerce")
     df = df.sort_values(["ticker", "data_referencia"])
 
-    # Quando ebitda_q for nulo, estima como ebit_q (conservador)
+    # ebitda_q nulo → estima como ebit_q
     if "ebitda_q" in df.columns and "ebit_q" in df.columns:
-        df["ebitda_q"] = df["ebitda_q"].fillna(df["ebit_q"])
+        mask = df["ebitda_q"].isna() & df["ebit_q"].notna()
+        df.loc[mask, "ebitda_q"] = df.loc[mask, "ebit_q"]
 
     resultados = []
 
     for ticker, grp in df.groupby("ticker"):
         grp = grp.sort_values("data_referencia", ascending=False)
-
-        # Ultimos 4 trimestres disponiveis
         ultimos4 = grp.head(4)
 
         if len(ultimos4) < 1:
             continue
 
-        # Trimestre mais recente para balanco
         mais_recente = ultimos4.iloc[0]
 
-        # LTM: soma das colunas _q dos ultimos 4 trimestres
         def ltm(col):
             if col not in ultimos4.columns:
                 return np.nan
-            vals = ultimos4[col].dropna()
-            return vals.sum() if len(vals) > 0 else np.nan
+            vals = pd.to_numeric(ultimos4[col], errors="coerce")
+            nao_nulos = vals.dropna()
+            return nao_nulos.sum() if len(nao_nulos) >= 1 else np.nan
 
         row = {
             "ticker": ticker,
@@ -74,13 +75,13 @@ def buscar_fundamentos() -> pd.DataFrame:
             "trimestre": int(mais_recente["trimestre"]) if pd.notna(mais_recente["trimestre"]) else None,
             "data_referencia": mais_recente["data_referencia"],
             "trimestres_ltm": len(ultimos4),
-            # DRE LTM
+            # DRE LTM — soma dos _q disponíveis
             "receita_liquida_ltm": ltm("receita_liquida_q"),
             "lucro_bruto_ltm": ltm("lucro_bruto_q"),
             "ebit_ltm": ltm("ebit_q"),
             "ebitda_ltm": ltm("ebitda_q"),
             "lucro_liquido_ltm": ltm("lucro_liquido_q"),
-            # Balanco mais recente
+            # Balanco — trimestre mais recente
             "ativo_total": mais_recente.get("ativo_total"),
             "ativo_circulante": mais_recente.get("ativo_circulante"),
             "passivo_circulante": mais_recente.get("passivo_circulante"),
@@ -94,14 +95,23 @@ def buscar_fundamentos() -> pd.DataFrame:
 
     df_out = pd.DataFrame(resultados)
 
-    # Filtra minimo de dados validos
-    df_out = df_out[
-        df_out["receita_liquida_ltm"].notna() & (df_out["receita_liquida_ltm"] > 0) &
-        df_out["patrimonio_liquido"].notna() & (df_out["patrimonio_liquido"] != 0) &
-        df_out["quantidade_acoes"].notna() & (df_out["quantidade_acoes"] > 0)
-    ]
+    for col in ["receita_liquida_ltm", "ativo_total", "patrimonio_liquido",
+                "quantidade_acoes", "ebit_ltm"]:
+        if col in df_out.columns:
+            df_out[col] = pd.to_numeric(df_out[col], errors="coerce")
 
-    print(f"  {len(df_out)} tickers com LTM valido.")
+    # Filtro mínimo: precisa de receita LTM positiva, PL e quantidade de ações
+    mask = (
+        df_out["receita_liquida_ltm"].notna() &
+        (df_out["receita_liquida_ltm"] > 0) &
+        df_out["patrimonio_liquido"].notna() &
+        (df_out["patrimonio_liquido"] != 0) &
+        df_out["quantidade_acoes"].notna() &
+        (df_out["quantidade_acoes"] > 0)
+    )
+    df_out = df_out[mask].copy()
+
+    print(f"  {len(df_out)} tickers com LTM válido.")
     return df_out
 
 
@@ -110,13 +120,21 @@ def buscar_cotacoes() -> pd.DataFrame:
 
     data_limite = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    data = (
-        supabase.table("cotacoes")
-        .select("ticker, data, fechamento, volume")
-        .gte("data", data_limite)
-        .execute()
-        .data
-    )
+    data = []
+    offset = 0
+    while True:
+        chunk = (
+            supabase.table("cotacoes")
+            .select("ticker, data, fechamento, volume")
+            .gte("data", data_limite)
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        data.extend(chunk)
+        if len(chunk) < 1000:
+            break
+        offset += 1000
 
     if not data:
         print("  Nenhuma cotacao encontrada.")
@@ -178,8 +196,8 @@ def buscar_dividendos() -> pd.DataFrame:
 
 
 def calcular_dividendos(df_div: pd.DataFrame):
+    empty = pd.DataFrame(columns=["ticker"])
     if df_div.empty:
-        empty = pd.DataFrame(columns=["ticker"])
         return empty.assign(dividendos_12m=None), empty.assign(dividendos_6a_media=None)
 
     hoje = datetime.now()
@@ -206,13 +224,21 @@ def calcular_dividendos(df_div: pd.DataFrame):
 def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
     print("Calculando CAGR 5 anos (base T4)...")
 
-    data = (
-        supabase.table("fundamentos_trimestrais")
-        .select("ticker, ano, trimestre, receita_liquida_ytd, lucro_liquido_ytd")
-        .eq("trimestre", 4)
-        .execute()
-        .data
-    )
+    data = []
+    offset = 0
+    while True:
+        chunk = (
+            supabase.table("fundamentos_trimestrais")
+            .select("ticker, ano, trimestre, receita_liquida_ytd, lucro_liquido_ytd")
+            .eq("trimestre", 4)
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        data.extend(chunk)
+        if len(chunk) < 1000:
+            break
+        offset += 1000
 
     if not data:
         return pd.DataFrame(columns=["ticker", "cagr_receita_5a", "cagr_lucro_5a"])
@@ -237,11 +263,13 @@ def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
         rec_cagr = (
             (atual["receita_liquida_ytd"] / b["receita_liquida_ytd"]) ** (1 / 5) - 1
             if pd.notna(b["receita_liquida_ytd"]) and b["receita_liquida_ytd"] > 0
+            and pd.notna(atual["receita_liquida_ytd"])
             else np.nan
         )
         luc_cagr = (
             (atual["lucro_liquido_ytd"] / b["lucro_liquido_ytd"]) ** (1 / 5) - 1
             if pd.notna(b["lucro_liquido_ytd"]) and b["lucro_liquido_ytd"] > 0
+            and pd.notna(atual["lucro_liquido_ytd"])
             else np.nan
         )
 
@@ -272,37 +300,47 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         df["cagr_receita_5a"] = np.nan
         df["cagr_lucro_5a"] = np.nan
 
-    df["dividendos_12m"] = df["dividendos_12m"].fillna(0)
-    df["dividendos_6a_media"] = df["dividendos_6a_media"].fillna(0)
-    df["volume_medio_diario"] = df["volume_medio_diario"].fillna(0)
+    df["dividendos_12m"] = pd.to_numeric(df["dividendos_12m"], errors="coerce").fillna(0)
+    df["dividendos_6a_media"] = pd.to_numeric(df["dividendos_6a_media"], errors="coerce").fillna(0)
+    df["volume_medio_diario"] = pd.to_numeric(df["volume_medio_diario"], errors="coerce").fillna(0)
 
-    # Por acao
+    for col in ["ativo_total", "ativo_circulante", "passivo_circulante",
+                "patrimonio_liquido", "caixa", "divida_bruta", "divida_liquida",
+                "quantidade_acoes", "preco_atual"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Por ação
     df["lpa"] = df["lucro_liquido_ltm"] / df["quantidade_acoes"]
     df["vpa"] = df["patrimonio_liquido"] / df["quantidade_acoes"]
 
     mc = df["preco_atual"] * df["quantidade_acoes"]
-    ev = mc + df["divida_liquida"].fillna(0)
+    div_liq = df["divida_liquida"].fillna(0)
+    ev = mc + div_liq
 
-    # Multiplos
-    df["p_l"] = mc / df["lucro_liquido_ltm"]
-    df["p_vp"] = df["preco_atual"] / df["vpa"]
-    df["p_receita"] = mc / df["receita_liquida_ltm"]
-    df["p_ativo"] = mc / df["ativo_total"]
-    df["p_cap_giro"] = mc / (df["ativo_circulante"] - df["passivo_circulante"])
+    # Múltiplos — divisão segura
+    def safe_div(a, b):
+        result = a / b.replace(0, np.nan)
+        return result.where(b.notna() & (b != 0))
+
+    df["p_l"] = safe_div(mc, df["lucro_liquido_ltm"])
+    df["p_vp"] = df["preco_atual"] / df["vpa"].replace(0, np.nan)
+    df["p_receita"] = safe_div(mc, df["receita_liquida_ltm"])
+    df["p_ativo"] = safe_div(mc, df["ativo_total"])
+    cap_giro = df["ativo_circulante"] - df["passivo_circulante"]
+    df["p_cap_giro"] = safe_div(mc, cap_giro)
     df["p_ativo_circ_liq"] = df["p_cap_giro"]
-    df["p_ebit"] = mc / df["ebit_ltm"]
-    df["p_ebitda"] = mc / df["ebitda_ltm"]
-    df["ev_ebit"] = ev / df["ebit_ltm"]
-    df["ev_ebitda"] = ev / df["ebitda_ltm"]
+    df["p_ebit"] = safe_div(mc, df["ebit_ltm"])
+    df["p_ebitda"] = safe_div(mc, df["ebitda_ltm"])
+    df["ev_ebit"] = safe_div(ev, df["ebit_ltm"])
+    df["ev_ebitda"] = safe_div(ev, df["ebitda_ltm"])
 
     # Rentabilidade
-    df["roe"] = df["lucro_liquido_ltm"] / df["patrimonio_liquido"]
-    df["roa"] = df["lucro_liquido_ltm"] / df["ativo_total"]
-    df["roic"] = (
-        (df["ebit_ltm"] * (1 - TAXA_IMPOSTO))
-        / (df["patrimonio_liquido"] + df["divida_liquida"].fillna(0))
-    )
-    df["giro_ativos"] = df["receita_liquida_ltm"] / df["ativo_total"]
+    df["roe"] = safe_div(df["lucro_liquido_ltm"], df["patrimonio_liquido"])
+    df["roa"] = safe_div(df["lucro_liquido_ltm"], df["ativo_total"])
+    cap_inv = df["patrimonio_liquido"] + div_liq
+    df["roic"] = safe_div(df["ebit_ltm"] * (1 - TAXA_IMPOSTO), cap_inv)
+    df["giro_ativos"] = safe_div(df["receita_liquida_ltm"], df["ativo_total"])
 
     # Margens
     rec = df["receita_liquida_ltm"].replace(0, np.nan)
@@ -312,26 +350,29 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df["margem_liquida"] = df["lucro_liquido_ltm"] / rec
 
     # Endividamento
-    div_liq = df["divida_liquida"].fillna(0)
-    df["div_liq_ativos"] = div_liq / df["ativo_total"]
-    df["div_liq_pl"] = div_liq / df["patrimonio_liquido"]
-    df["div_liq_ebit"] = div_liq / df["ebit_ltm"]
-    df["div_liq_ebitda"] = div_liq / df["ebitda_ltm"]
-    df["liquidez_corrente"] = df["ativo_circulante"] / df["passivo_circulante"]
-    df["passivos_ativos"] = (df["ativo_total"] - df["patrimonio_liquido"]) / df["ativo_total"]
-    df["pl_ativos"] = df["patrimonio_liquido"] / df["ativo_total"]
+    df["div_liq_ativos"] = safe_div(div_liq, df["ativo_total"])
+    df["div_liq_pl"] = safe_div(div_liq, df["patrimonio_liquido"])
+    df["div_liq_ebit"] = safe_div(div_liq, df["ebit_ltm"])
+    df["div_liq_ebitda"] = safe_div(div_liq, df["ebitda_ltm"])
+    df["liquidez_corrente"] = safe_div(df["ativo_circulante"], df["passivo_circulante"])
+    df["passivos_ativos"] = safe_div(df["ativo_total"] - df["patrimonio_liquido"], df["ativo_total"])
+    df["pl_ativos"] = safe_div(df["patrimonio_liquido"], df["ativo_total"])
 
     # DY
-    df["dy_atual"] = df["dividendos_12m"] / df["preco_atual"]
+    df["dy_atual"] = df["dividendos_12m"] / df["preco_atual"].replace(0, np.nan)
 
     # Valuation
-    df["preco_justo_graham"] = np.sqrt(np.maximum(0, 22.5 * df["lpa"] * df["vpa"]))
-    df["preco_justo_graham_br"] = np.sqrt(np.maximum(0, 15 * df["lpa"] * df["vpa"]))
+    df["preco_justo_graham"] = np.sqrt(
+        np.maximum(0, 22.5 * df["lpa"].clip(lower=0) * df["vpa"].clip(lower=0))
+    )
+    df["preco_justo_graham_br"] = np.sqrt(
+        np.maximum(0, 15 * df["lpa"].clip(lower=0) * df["vpa"].clip(lower=0))
+    )
     df["preco_justo_bazin"] = df["dividendos_12m"] / 0.06
     df["preco_teto_medio"] = df["dividendos_6a_media"] / 0.06
 
     df["preco_justo_lynch"] = np.where(
-        (df["cagr_lucro_5a"] > 0) & (df["cagr_lucro_5a"] <= 0.50),
+        df["cagr_lucro_5a"].notna() & (df["cagr_lucro_5a"] > 0) & (df["cagr_lucro_5a"] <= 0.50),
         df["lpa"] * (df["cagr_lucro_5a"] * 100),
         np.nan,
     )
@@ -339,24 +380,20 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     for metodo in ["graham", "graham_br", "bazin", "lynch"]:
         col_pj = f"preco_justo_{metodo}"
         df[f"{metodo}_upside"] = np.where(
-            df["preco_atual"] > 0,
+            df["preco_atual"].notna() & (df["preco_atual"] > 0) & df[col_pj].notna(),
             (df[col_pj] / df["preco_atual"] - 1) * 100,
             np.nan,
         )
     df["agf_upside"] = np.where(
-        df["preco_atual"] > 0,
+        df["preco_atual"].notna() & (df["preco_atual"] > 0) & df["preco_teto_medio"].notna(),
         (df["preco_teto_medio"] / df["preco_atual"] - 1) * 100,
         np.nan,
     )
 
-    # Metadados
     df["pl_absoluto"] = df["patrimonio_liquido"]
     df["data_calculo"] = datetime.now(UTC).date().isoformat()
-    df["data_balanco"] = pd.to_datetime(
-        df["data_referencia"], errors="coerce"
-    ).dt.strftime("%Y-%m-%d")
+    df["data_balanco"] = pd.to_datetime(df["data_referencia"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-    # Renomeia LTM para nomes finais
     df = df.rename(columns={
         "receita_liquida_ltm": "receita_liquida",
         "lucro_liquido_ltm": "lucro_liquido",
@@ -384,7 +421,12 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     ]
 
     df_out = df[[c for c in cols_saida if c in df.columns]].copy()
-    df_out = df_out.replace({np.inf: None, -np.inf: None, np.nan: None})
+    df_out = df_out.replace({np.inf: None, -np.inf: None})
+
+    # Converte NaN para None (JSON serializável)
+    for col in df_out.select_dtypes(include=[np.number]).columns:
+        df_out[col] = df_out[col].where(df_out[col].notna(), other=None)
+
     df_out = df_out.drop_duplicates(subset=["ticker"], keep="last")
 
     registros = df_out.to_dict("records")
@@ -392,17 +434,19 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
 
     lote = 100
     erros = 0
+    salvos = 0
     for i in range(0, len(registros), lote):
         try:
             supabase.table("indicadores").upsert(
                 registros[i: i + lote],
                 on_conflict="ticker,data_calculo",
             ).execute()
+            salvos += len(registros[i: i + lote])
         except Exception as e:
             erros += 1
             print(f"  Erro no lote {i}: {e}")
 
-    print(f"Concluido. {len(registros)} registros salvos, {erros} lotes com erro.")
+    print(f"Concluido. {salvos} registros salvos, {erros} lotes com erro.")
 
 
 def main():
