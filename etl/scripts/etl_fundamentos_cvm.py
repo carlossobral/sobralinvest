@@ -8,7 +8,7 @@ from etl.database.supabase_client import supabase
 
 # FORÇAR APENAS ANOS FECHADOS E AUDITADOS (Ignora projeções/erros de 2025/2026 da CVM)
 ANO_INICIAL = 2019  
-ANO_FINAL = 2024  # <--- CORREÇÃO CRÍTICA: Trava em 2024 para garantir dados auditados
+ANO_FINAL = 2026
 
 MAPEAMENTO = {
     'receita_liquida': r'(?i)^3\.01$|^3\.01\.00$|receita.de.intermedia..o.financeira|receita.de.venda.de.bens',
