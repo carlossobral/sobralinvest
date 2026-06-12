@@ -134,7 +134,18 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
 
     print("🧮 Calculando indicadores e valuations...")
     
+    # === RASTREADORES DE DEBUG ===
+    alvos = ['PETR4', 'VALE3', 'WEGE3', 'ITUB4']
+    def checar_alvos(df, etapa):
+        presentes = [t for t in alvos if t in df['ticker'].values]
+        print(f"🔍 DEBUG [{etapa}]: Alvos presentes: {presentes}")
+        return presentes
+
+    checar_alvos(df_fund, "1. Fundamentos Carregados")
+    
     df = df_fund.merge(df_cot, on='ticker', how='left')
+    checar_alvos(df, "2. Após merge com cotações")
+    
     df = df.merge(df_div_12m, on='ticker', how='left')
     df = df.merge(df_div_6a, on='ticker', how='left')
     
@@ -165,7 +176,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df['ev_ebit'] = ev / df['ebit_ytd']
     df['ev_ebitda'] = ev / df['ebitda_ytd']
     
-    # 3. Rentabilidade e Margens (Proteção contra divisão por zero ou receita negativa)
+    # 3. Rentabilidade e Margens
     df['roe'] = df['lucro_liquido_ytd'] / df['patrimonio_liquido']
     df['roa'] = df['lucro_liquido_ytd'] / df['ativo_total']
     df['roic'] = (df['ebit_ytd'] * (1 - TAXA_IMPOSTO)) / (df['patrimonio_liquido'] + df['divida_liquida'])
@@ -214,7 +225,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     else:
         df['data_balanco'] = None
     
-    # Lista final de colunas (usando os nomes originais do schema da tabela indicadores)
+    # Lista final de colunas
     cols_finais = [
         'ticker', 'ano', 'data_calculo', 'data_balanco', 'preco_atual',
         'dy_atual', 'p_l', 'p_vp', 'p_receita', 'p_ativo', 'p_cap_giro', 
@@ -229,33 +240,37 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         'dividendos_12m', 'dividendos_6a_media', 'volume_medio_diario'
     ]
     
-    # Filtra apenas colunas que existem no DataFrame
     df_saida = df[[c for c in cols_finais if c in df.columns]].replace({np.inf: None, -np.inf: None, np.nan: None})
+    checar_alvos(df_saida, "3. Após filtrar colunas e limpar NaN/Inf")
     
-    # CORREÇÃO CRÍTICA: Renomeia as colunas _ytd para os nomes originais esperados pelo banco
     df_saida = df_saida.rename(columns={
         'receita_liquida_ytd': 'receita_liquida',
         'lucro_liquido_ytd': 'lucro_liquido',
         'ebit_ytd': 'ebit'
     })
     
-    # Remove duplicatas exatas de ticker + data_calculo antes do upsert
     df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_calculo'], keep='last')
+    checar_alvos(df_saida, "4. Após drop_duplicates")
     
     registros = df_saida.to_dict('records')
+    presentes_dict = [t for t in alvos if any(r.get('ticker') == t for r in registros)]
+    print(f"🔍 DEBUG [5. Dicionário final]: Alvos presentes: {presentes_dict}")
     
     print(f"💾 Salvando {len(registros)} registros no Supabase...")
     if registros:
         lote = 100
         for i in range(0, len(registros), lote):
-            supabase.table("indicadores").upsert(
-                registros[i:i+lote], 
-                on_conflict="ticker,data_calculo"
-            ).execute()
+            try:
+                supabase.table("indicadores").upsert(
+                    registros[i:i+lote], 
+                    on_conflict="ticker,data_calculo"
+                ).execute()
+            except Exception as e:
+                print(f"❌ ERRO NO UPSERT do lote {i}: {e}")
         print("✅ Salvamento concluído.")
 
 def main():
-    print("🚀 Iniciando Motor de Indicadores (Versão Dinâmica e Definitiva)...")
+    print("🚀 Iniciando Motor de Indicadores (Com Debug Ativado)...")
     
     df_fund = buscar_fundamentos()
     if df_fund.empty: 
@@ -269,7 +284,7 @@ def main():
     df_cagr = calcular_cagr(df_fund)
     
     calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr)
-    print("\n🏆 CONCLUÍDO! Fase 2 finalizada com sucesso.")
+    print("\n🏆 CONCLUÍDO! Fase 2 finalizada.")
 
 if __name__ == "__main__":
     main()
