@@ -61,19 +61,23 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
             for nome in arquivos_consolidados:
                 df = pd.read_csv(z.open(nome), sep=';', decimal=',', encoding='latin1')
+                
+                # ========================================================================
+                # CORREÇÃO CRÍTICA: Filtrar APENAS o exercício mais recente (ÚLTIMO)
+                # O arquivo DFP contém dados de 2 exercícios (ÚLTIMO e PENÚLTIMO)
+                # Se não filtrarmos, o groupby soma os dois e dobra os valores!
+                # ========================================================================
+                if 'ORDEM_EXERC' in df.columns:
+                    # Normaliza para pegar tanto "ÚLTIMO" quanto "ULTIMO" (sem acento)
+                    df['ORDEM_EXERC_NORMALIZADO'] = df['ORDEM_EXERC'].astype(str).str.upper().str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
+                    df = df[df['ORDEM_EXERC_NORMALIZADO'] == 'ULTIMO']
+                    print(f"   📊 {nome}: {len(df)} linhas após filtrar ORDEM_EXERC='ÚLTIMO'")
+                
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
                 for conta_padrao, regex in MAPEAMENTO.items():
-                    # FULLMATCH ESTRITO: Só casa se a string inteira for exatamente o código
                     df_filtrado = df[df['CD_CONTA'].astype(str).str.strip().str.fullmatch(regex, na=False)]
                     
-                    # DEBUG CIRÚRGICO: Mostra exatamente o que está sendo somado para PETR4 (CVM 1934 ou 2362)
-                    if not df_filtrado.empty and conta_padrao in ['receita_liquida', 'custo']:
-                        petro = df_filtrado[df_filtrado['CD_CVM'].astype(str).isin(['1934', '2362'])]
-                        if not petro.empty:
-                            resumo = petro.groupby('CD_CONTA')['valor'].sum().to_dict()
-                            print(f"   🔍 DEBUG {ano} {tipo_doc} {conta_padrao} PETR4: Contas capturadas: {list(resumo.keys())} | Soma: {sum(resumo.values())/1e9:.2f} bi")
-
                     if not df_filtrado.empty:
                         agg = df_filtrado.groupby(['CD_CVM', 'DT_REFER'])['valor'].sum().reset_index()
                         agg['conta'] = conta_padrao
@@ -128,18 +132,21 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         return pd.DataFrame()
 
 def main():
-    print("🔄 Iniciando carga (Com limpeza de cache e debug PETR4)...")
+    print("🔄 Iniciando carga (Com filtro ORDEM_EXERC=ÚLTIMO)...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
     if not mapa_tickers: return
 
     todos_registros = []
     for ano in range(ANO_INICIAL, ANO_FINAL + 1):
+        print(f"\n📊 Processando {ano}...")
         df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
         if not df_dfp.empty:
             todos_registros.append(df_dfp)
+            print(f"  ✅ DFP {ano}: {len(df_dfp)} registros")
         df_itr = processar_ano(ano, 'ITR', mapa_tickers, mapa_acoes)
         if not df_itr.empty:
             todos_registros.append(df_itr)
+            print(f"  ✅ ITR {ano}: {len(df_itr)} registros")
     
     if not todos_registros: return
     
