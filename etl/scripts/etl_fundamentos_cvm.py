@@ -82,6 +82,14 @@ def extrair_lucro_liquido(df):
 
     merged = df311_agg.merge(df309_agg, on=['CD_CVM', 'DT_REFER'], how='outer')
 
+    # DEBUG: Mostrar se há empresas com ambas as contas
+    ambas = merged[merged['lucro_liquido'].notna() & merged['lucro_liquido_309'].notna()]
+    if not ambas.empty:
+        print(f"    ⚠️  {len(ambas)} empresas têm AMBAS as contas 3.09 e 3.11")
+        # Mostrar exemplos
+        for _, row in ambas.head(3).iterrows():
+            print(f"      CVM {row['CD_CVM']}: 3.11={row['lucro_liquido']/1e6:.2f}M, 3.09={row['lucro_liquido_309']/1e6:.2f}M")
+
     # Usa 3.11 quando disponível, senão 3.09
     merged['lucro_liquido'] = merged['lucro_liquido'].combine_first(merged['lucro_liquido_309'])
     return merged[['CD_CVM', 'DT_REFER', 'lucro_liquido']].set_index(['CD_CVM', 'DT_REFER'])
@@ -238,6 +246,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 df_out['quantidade_acoes'], errors='coerce'
             ).astype('Int64')
 
+        # Adicionar coluna fonte para priorização
+        df_out['fonte'] = tipo_doc
+
         df_out = df_out.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
         return df_out
 
@@ -370,22 +381,26 @@ def main():
         print("Nenhum ticker. Abortando.")
         return
 
-    todos = []
+    todos_dfp = []
+    todos_itr = []
     todos_dfc = []
 
     for ano in range(ANO_INICIAL, ANO_FINAL + 1):
         print(f"\nAno {ano}...")
 
+        # Processar DFP primeiro
         df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
         if not df_dfp.empty:
-            todos.append(df_dfp)
+            todos_dfp.append(df_dfp)
             print(f"  DFP: {len(df_dfp)} registros")
 
+        # Processar ITR depois
         df_itr = processar_ano(ano, 'ITR', mapa_tickers, mapa_acoes)
         if not df_itr.empty:
-            todos.append(df_itr)
+            todos_itr.append(df_itr)
             print(f"  ITR: {len(df_itr)} registros")
 
+        # DFC (apenas uma vez por ano)
         df_dfc_dfp = processar_dfc(ano, 'DFP', mapa_tickers)
         if not df_dfc_dfp.empty:
             todos_dfc.append(df_dfc_dfp)
@@ -396,13 +411,46 @@ def main():
             todos_dfc.append(df_dfc_itr)
             print(f"  DFC ITR: {len(df_dfc_itr)} registros")
 
-    if not todos:
+    if not todos_dfp and not todos_itr:
         print("Nenhum dado extraído.")
         registrar_carga("ERRO", 0, "Nenhum dado extraído")
         return
 
-    df_final = pd.concat(todos, ignore_index=True)
-    df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
+    # CORREÇÃO CRÍTICA: Priorizar DFP sobre ITR
+    # Concatenar DFP e ITR separadamente
+    if todos_dfp and todos_itr:
+        df_dfp_all = pd.concat(todos_dfp, ignore_index=True)
+        df_itr_all = pd.concat(todos_itr, ignore_index=True)
+        
+        # Remover duplicatas dentro de cada fonte
+        df_dfp_all = df_dfp_all.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
+        df_itr_all = df_itr_all.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
+        
+        # Merge: DFP tem prioridade (usar outer join e depois priorizar DFP)
+        df_final = df_dfp_all.copy()
+        
+        # Adicionar apenas registros do ITR que NÃO existem no DFP
+        df_itr_somente = df_itr_all.merge(
+            df_dfp_all[['ticker', 'ano', 'trimestre']],
+            on=['ticker', 'ano', 'trimestre'],
+            how='left',
+            indicator=True
+        )
+        df_itr_somente = df_itr_somente[df_itr_somente['_merge'] == 'left_only'].drop(columns=['_merge'])
+        
+        print(f"\nPriorização: {len(df_dfp_all)} DFP + {len(df_itr_somente)} ITR (exclusivos)")
+        
+        df_final = pd.concat([df_final, df_itr_somente], ignore_index=True)
+        
+    elif todos_dfp:
+        df_final = pd.concat(todos_dfp, ignore_index=True)
+    else:
+        df_final = pd.concat(todos_itr, ignore_index=True)
+
+    # Remover coluna fonte se existir
+    if 'fonte' in df_final.columns:
+        df_final = df_final.drop(columns=['fonte'])
+
     df_final = calcular_colunas_q(df_final)
 
     if todos_dfc:
