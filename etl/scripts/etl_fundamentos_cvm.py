@@ -82,6 +82,28 @@ def extrair_lucro_liquido(df):
     return merged[['CD_CVM', 'DT_REFER', 'lucro_liquido']].set_index(['CD_CVM', 'DT_REFER'])
 
 
+def extrair_depreciacao_amortizacao(df):
+    """Extrai D&A do DFC Método Indireto."""
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    df['DS_CONTA_STR'] = df['DS_CONTA'].astype(str).str.strip().str.lower()
+    
+    # Filtro robusto para D&A
+    mask_da = (
+        df['CD_CONTA_STR'].str.startswith('6.01.01') &
+        (df['DS_CONTA_STR'].str.contains('deprecia', na=False) | 
+         df['DS_CONTA_STR'].str.contains('amortiza', na=False) |
+         df['DS_CONTA_STR'].str.contains('exaust', na=False))
+    )
+    df_da = df[mask_da]
+    
+    if df_da.empty:
+        return pd.DataFrame()
+    
+    agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg.columns = ['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']
+    return agg.set_index(['CD_CVM', 'DT_REFER'])
+
+
 def processar_csv_dre(df_csv, mapeamento):
     frames = {}
     for conta, regex in mapeamento.items():
@@ -112,6 +134,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             dre_csv  = [n for n in csvs_con if '_DRE_' in n.upper()]
             bpa_csv  = [n for n in csvs_con if '_BPA_' in n.upper()]
             bpp_csv  = [n for n in csvs_con if '_BPP_' in n.upper()]
+            dfc_csv  = [n for n in csvs_con if '_DFC_MI_' in n.upper()]  # NOVO: DFC Método Indireto
 
             # DRE
             for nome in dre_csv:
@@ -163,6 +186,23 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 for conta, frame in frames.items():
                     resultado[conta] = frame
 
+            # DFC (NOVO: Processar D&A dentro do mesmo loop)
+            for nome in dfc_csv:
+                df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
+                df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
+                df['CD_CONTA'] = df['CD_CONTA'].astype(str).str.strip()
+                if 'ORDEM_EXERC' in df.columns:
+                    norm = df['ORDEM_EXERC'].astype(str).str.upper().str.strip()
+                    norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
+                    df = df[norm == 'ULTIMO']
+                
+                da = extrair_depreciacao_amortizacao(df)
+                if not da.empty:
+                    if 'depreciacao_amortizacao' not in resultado:
+                        resultado['depreciacao_amortizacao'] = da
+                    else:
+                        resultado['depreciacao_amortizacao'] = resultado['depreciacao_amortizacao'].combine_first(da)
+
         if not resultado:
             return pd.DataFrame()
 
@@ -171,11 +211,17 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
             df_final['lucro_bruto'] = df_final['receita_liquida'] + df_final['custo']
 
+        # EBITDA = EBIT + D&A (NOVO: Agora com D&A real do DFC)
         if 'ebit' in df_final.columns:
-            df_final['ebitda'] = df_final['ebit']
+            da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
+            df_final['ebitda'] = df_final['ebit'] + da
 
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
+
+        # D&A também precisa ser multiplicada por 1000
+        if 'depreciacao_amortizacao' in df_final.columns:
+            df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
@@ -209,6 +255,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             ['ticker', 'ano', 'trimestre', 'data_referencia']
             + [f'{c}_ytd' for c in COLUNAS_DRE if f'{c}_ytd' in df_final.columns]
             + [c for c in COLUNAS_BAL if c in df_final.columns]
+            + ['depreciacao_amortizacao']  # NOVO: Incluir D&A na saída
             + ['quantidade_acoes']
         )
 
@@ -224,79 +271,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
     except Exception as e:
         print(f"  Erro {tipo_doc} {ano}: {e}")
-        return pd.DataFrame()
-
-
-def processar_dfc(ano, tipo_doc, mapa_tickers):
-    url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFC_MI/DADOS/dfc_mi_cia_aberta_{ano}.zip"
-
-    try:
-        r = httpx.get(url, timeout=180, follow_redirects=True)
-        if r.status_code != 200:
-            print(f"  [DFC] Falha ao baixar {ano}: HTTP {r.status_code}")
-            return pd.DataFrame()
-
-        frames = []
-        with ZipFile(BytesIO(r.content)) as z:
-            csvs = [n for n in z.namelist() if '_con_' in n.lower() and n.endswith('.csv')]
-            if not csvs:
-                print(f"  [DFC] Nenhum arquivo _con_ encontrado no ZIP de {ano}")
-                return pd.DataFrame()
-                
-            for nome in csvs:
-                df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
-                df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0) * 1000
-
-                if 'ORDEM_EXERC' in df.columns:
-                    norm = df['ORDEM_EXERC'].astype(str).str.upper().str.strip()
-                    norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
-                    df = df[norm == 'ULTIMO']
-
-                # Filtro robusto para D&A
-                df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-                df['DS_CONTA_STR'] = df['DS_CONTA'].astype(str).str.strip().str.lower()
-                
-                mask_da = (
-                    df['CD_CONTA_STR'].str.startswith('6.01.01') &
-                    (df['DS_CONTA_STR'].str.contains('deprecia', na=False) | 
-                     df['DS_CONTA_STR'].str.contains('amortiza', na=False) |
-                     df['DS_CONTA_STR'].str.contains('exaust', na=False))
-                )
-                df_da = df[mask_da]
-
-                if not df_da.empty:
-                    agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-                    frames.append(agg)
-
-        if not frames:
-            print(f"  [DFC] Nenhum registro de D&A encontrado em {ano}")
-            return pd.DataFrame()
-
-        df = pd.concat(frames, ignore_index=True)
-        df = df.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-        df.columns = ['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']
-
-        df['CD_CVM_STR'] = df['CD_CVM'].astype(str)
-        df['ticker'] = df['CD_CVM_STR'].map(mapa_tickers)
-        df = df.dropna(subset=['ticker'])
-
-        df['DT_REFER'] = pd.to_datetime(df['DT_REFER'], errors='coerce')
-        df['ano'] = df['DT_REFER'].dt.year.astype(int)
-        df['data_referencia'] = df['DT_REFER'].dt.strftime('%Y-%m-%d')
-
-        if tipo_doc == 'ITR':
-            df['trimestre'] = df['DT_REFER'].dt.month.map({3: 1, 6: 2, 9: 3})
-            df = df.dropna(subset=['trimestre'])
-            df['trimestre'] = df['trimestre'].astype(int)
-        else:
-            df['trimestre'] = 4
-
-        return df[['ticker', 'ano', 'trimestre', 'depreciacao_amortizacao']].drop_duplicates(
-            subset=['ticker', 'ano', 'trimestre'], keep='last'
-        )
-
-    except Exception as e:
-        print(f"  [DFC] Erro {tipo_doc} {ano}: {e}")
         return pd.DataFrame()
 
 
@@ -318,27 +292,6 @@ def calcular_colunas_q(df):
     return df
 
 
-def integrar_dfc(df_principal, df_dfc):
-    if df_dfc.empty:
-        print("  [DFC] Sem dados de D&A. EBITDA = EBIT.")
-        return df_principal
-
-    print(f"  [DFC] Integrando D&A: {len(df_dfc)} registros...")
-    df = df_principal.merge(df_dfc, on=['ticker', 'ano', 'trimestre'], how='left')
-
-    if 'ebit_ytd' in df.columns:
-        da = df['depreciacao_amortizacao'].fillna(0)
-        df['ebitda_ytd'] = df['ebit_ytd'] + da
-
-    if 'ebit_q' in df.columns:
-        da_q = df['depreciacao_amortizacao'].fillna(0) / 4.0
-        df['ebitda_q'] = df['ebit_q'] + da_q
-
-    ok = df['depreciacao_amortizacao'].notna().sum()
-    print(f"  [DFC] {ok} registros com D&A integrado com sucesso.")
-    return df
-
-
 def main():
     print("Iniciando ETL de fundamentos CVM...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
@@ -348,7 +301,6 @@ def main():
 
     todos_dfp = []
     todos_itr = []
-    todos_dfc = []
 
     for ano in range(ANO_INICIAL, ANO_FINAL + 1):
         print(f"\nAno {ano}...")
@@ -362,16 +314,6 @@ def main():
         if not df_itr.empty:
             todos_itr.append(df_itr)
             print(f"  ITR: {len(df_itr)} registros")
-
-        df_dfc_dfp = processar_dfc(ano, 'DFP', mapa_tickers)
-        if not df_dfc_dfp.empty:
-            todos_dfc.append(df_dfc_dfp)
-            print(f"  DFC DFP: {len(df_dfc_dfp)} registros")
-
-        df_dfc_itr = processar_dfc(ano, 'ITR', mapa_tickers)
-        if not df_dfc_itr.empty:
-            todos_dfc.append(df_dfc_itr)
-            print(f"  DFC ITR: {len(df_dfc_itr)} registros")
 
     if not todos_dfp and not todos_itr:
         print("Nenhum dado extraído.")
@@ -407,11 +349,6 @@ def main():
         df_final = df_final.drop(columns=['fonte'])
 
     df_final = calcular_colunas_q(df_final)
-
-    if todos_dfc:
-        df_dfc = pd.concat(todos_dfc, ignore_index=True)
-        df_dfc = df_dfc.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
-        df_final = integrar_dfc(df_final, df_dfc)
 
     df_final = df_final.replace({np.nan: None, pd.NaT: None})
     registros = df_final.to_dict('records')
