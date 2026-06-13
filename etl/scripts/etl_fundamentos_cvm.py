@@ -9,11 +9,11 @@ from etl.database.supabase_client import supabase
 ANO_INICIAL = 2019
 ANO_FINAL = datetime.now().year
 
-# Contas validadas contra 5 empresas (PETR4, ITUB4, WEGE3, USIM5, MGLU3)
+# Contas validadas
 MAPEAMENTO_DRE = {
     'receita_liquida': r'^3\.01$',
     'custo':           r'^3\.02$',
-    'ebit':            r'^3\.05$',   # EBIT empresas normais / EBT bancos (limitação aceita)
+    'ebit':            r'^3\.05$',
 }
 
 MAPEAMENTO_BPA = {
@@ -68,9 +68,6 @@ def obter_dados_empresas():
 
 
 def extrair_lucro_liquido(df):
-    """
-    Regra: usa 3.11 se existir, senão 3.09. Nunca soma os dois.
-    """
     df311 = df[df['CD_CONTA'].str.fullmatch(r'^3\.11$', na=False)].copy()
     df309 = df[df['CD_CONTA'].str.fullmatch(r'^3\.09$', na=False)].copy()
 
@@ -81,22 +78,11 @@ def extrair_lucro_liquido(df):
     df309_agg.columns = ['CD_CVM', 'DT_REFER', 'lucro_liquido_309']
 
     merged = df311_agg.merge(df309_agg, on=['CD_CVM', 'DT_REFER'], how='outer')
-
-    # DEBUG: Mostrar se há empresas com ambas as contas
-    ambas = merged[merged['lucro_liquido'].notna() & merged['lucro_liquido_309'].notna()]
-    if not ambas.empty:
-        print(f"    ⚠️  {len(ambas)} empresas têm AMBAS as contas 3.09 e 3.11")
-        # Mostrar exemplos
-        for _, row in ambas.head(3).iterrows():
-            print(f"      CVM {row['CD_CVM']}: 3.11={row['lucro_liquido']/1e6:.2f}M, 3.09={row['lucro_liquido_309']/1e6:.2f}M")
-
-    # Usa 3.11 quando disponível, senão 3.09
     merged['lucro_liquido'] = merged['lucro_liquido'].combine_first(merged['lucro_liquido_309'])
     return merged[['CD_CVM', 'DT_REFER', 'lucro_liquido']].set_index(['CD_CVM', 'DT_REFER'])
 
 
 def processar_csv_dre(df_csv, mapeamento):
-    """Extrai contas da DRE com fullmatch estrito."""
     frames = {}
     for conta, regex in mapeamento.items():
         mask = df_csv['CD_CONTA'].astype(str).str.strip().str.fullmatch(regex, na=False)
@@ -110,10 +96,7 @@ def processar_csv_dre(df_csv, mapeamento):
 
 
 def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
-    url = (
-        f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/"
-        f"{tipo_doc.lower()}_cia_aberta_{ano}.zip"
-    )
+    url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/{tipo_doc.lower()}_cia_aberta_{ano}.zip"
 
     try:
         r = httpx.get(url, timeout=180, follow_redirects=True)
@@ -136,7 +119,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 df['CD_CONTA'] = df['CD_CONTA'].astype(str).str.strip()
 
-                # Filtro ÚLTIMO
                 if 'ORDEM_EXERC' in df.columns:
                     norm = df['ORDEM_EXERC'].astype(str).str.upper().str.strip()
                     norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
@@ -149,7 +131,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     else:
                         resultado[conta] = resultado[conta].combine_first(frame)
 
-                # Lucro líquido com regra 3.11 > 3.09
                 ll = extrair_lucro_liquido(df)
                 if 'lucro_liquido' not in resultado:
                     resultado['lucro_liquido'] = ll
@@ -185,27 +166,21 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if not resultado:
             return pd.DataFrame()
 
-        # Juntar tudo
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
-        # Lucro bruto = receita + custo (custo já é negativo)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
             df_final['lucro_bruto'] = df_final['receita_liquida'] + df_final['custo']
 
-        # EBITDA = EBIT por enquanto (D&A integrado depois via DFC)
         if 'ebit' in df_final.columns:
             df_final['ebitda'] = df_final['ebit']
 
-        # Converter MILHARES → REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
 
-        # Dívida líquida
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
 
-        # Mapear ticker
         df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
         df_final['ticker'] = df_final['CD_CVM_STR'].map(mapa_tickers)
         df_final['quantidade_acoes'] = df_final['CD_CVM_STR'].map(mapa_acoes)
@@ -225,7 +200,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         else:
             df_final['trimestre'] = 4
 
-        # Renomear DRE → _ytd
         for col in COLUNAS_DRE:
             if col in df_final.columns:
                 df_final[f'{col}_ytd'] = df_final[col]
@@ -242,13 +216,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         df_out['ano'] = df_out['ano'].astype(int)
         df_out['trimestre'] = df_out['trimestre'].astype(int)
         if 'quantidade_acoes' in df_out.columns:
-            df_out['quantidade_acoes'] = pd.to_numeric(
-                df_out['quantidade_acoes'], errors='coerce'
-            ).astype('Int64')
+            df_out['quantidade_acoes'] = pd.to_numeric(df_out['quantidade_acoes'], errors='coerce').astype('Int64')
 
-        # Adicionar coluna fonte para priorização
         df_out['fonte'] = tipo_doc
-
         df_out = df_out.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
         return df_out
 
@@ -258,23 +228,21 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
 
 def processar_dfc(ano, tipo_doc, mapa_tickers):
-    """Extrai D&A do DFC Método Indireto — conta 6.01.01.04 ou descrição."""
-    url = (
-        f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFC_MI/DADOS/"
-        f"dfc_mi_cia_aberta_{ano}.zip"
-    )
+    url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFC_MI/DADOS/dfc_mi_cia_aberta_{ano}.zip"
 
     try:
         r = httpx.get(url, timeout=180, follow_redirects=True)
         if r.status_code != 200:
+            print(f"  [DFC] Falha ao baixar {ano}: HTTP {r.status_code}")
             return pd.DataFrame()
 
         frames = []
         with ZipFile(BytesIO(r.content)) as z:
-            csvs = [
-                n for n in z.namelist()
-                if '_con_' in n.lower() and n.endswith('.csv')
-            ]
+            csvs = [n for n in z.namelist() if '_con_' in n.lower() and n.endswith('.csv')]
+            if not csvs:
+                print(f"  [DFC] Nenhum arquivo _con_ encontrado no ZIP de {ano}")
+                return pd.DataFrame()
+                
             for nome in csvs:
                 df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0) * 1000
@@ -284,21 +252,24 @@ def processar_dfc(ano, tipo_doc, mapa_tickers):
                     norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     df = df[norm == 'ULTIMO']
 
-                # Conta exata 6.01.01.04 OU descrição com deprecia/amortiza/exaust
-                mask_conta = df['CD_CONTA'].astype(str).str.strip().str.fullmatch(r'^6\.01\.01\.04$', na=False)
-                mask_desc = (
-                    df['CD_CONTA'].astype(str).str.strip().str.startswith('6.01.01') &
-                    df['DS_CONTA'].str.contains(r'(?i)deprecia|amortiza|exaust', na=False)
+                # Filtro robusto para D&A
+                df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+                df['DS_CONTA_STR'] = df['DS_CONTA'].astype(str).str.strip().str.lower()
+                
+                mask_da = (
+                    df['CD_CONTA_STR'].str.startswith('6.01.01') &
+                    (df['DS_CONTA_STR'].str.contains('deprecia', na=False) | 
+                     df['DS_CONTA_STR'].str.contains('amortiza', na=False) |
+                     df['DS_CONTA_STR'].str.contains('exaust', na=False))
                 )
-                df_da = df[mask_conta | mask_desc]
+                df_da = df[mask_da]
 
-                if df_da.empty:
-                    continue
-
-                agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-                frames.append(agg)
+                if not df_da.empty:
+                    agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+                    frames.append(agg)
 
         if not frames:
+            print(f"  [DFC] Nenhum registro de D&A encontrado em {ano}")
             return pd.DataFrame()
 
         df = pd.concat(frames, ignore_index=True)
@@ -313,7 +284,6 @@ def processar_dfc(ano, tipo_doc, mapa_tickers):
         df['ano'] = df['DT_REFER'].dt.year.astype(int)
         df['data_referencia'] = df['DT_REFER'].dt.strftime('%Y-%m-%d')
 
-        # DFP = trimestre 4, ITR = mês → trimestre
         if tipo_doc == 'ITR':
             df['trimestre'] = df['DT_REFER'].dt.month.map({3: 1, 6: 2, 9: 3})
             df = df.dropna(subset=['trimestre'])
@@ -326,7 +296,7 @@ def processar_dfc(ano, tipo_doc, mapa_tickers):
         )
 
     except Exception as e:
-        print(f"  Aviso DFC_MI {tipo_doc} {ano}: {e}")
+        print(f"  [DFC] Erro {tipo_doc} {ano}: {e}")
         return pd.DataFrame()
 
 
@@ -342,7 +312,6 @@ def calcular_colunas_q(df):
 
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
-        # T1: diff é NaN → usa o próprio YTD
         df[col_q] = df[col_q].fillna(df[col_ytd])
 
     print(f"  {len(df)} registros processados.")
@@ -351,26 +320,22 @@ def calcular_colunas_q(df):
 
 def integrar_dfc(df_principal, df_dfc):
     if df_dfc.empty:
-        print("  Sem D&A do DFC. EBITDA = EBIT.")
+        print("  [DFC] Sem dados de D&A. EBITDA = EBIT.")
         return df_principal
 
-    print(f"  Integrando D&A: {len(df_dfc)} registros...")
-    df = df_principal.merge(
-        df_dfc, on=['ticker', 'ano', 'trimestre'], how='left'
-    )
+    print(f"  [DFC] Integrando D&A: {len(df_dfc)} registros...")
+    df = df_principal.merge(df_dfc, on=['ticker', 'ano', 'trimestre'], how='left')
 
-    # EBITDA anual = EBIT + D&A
     if 'ebit_ytd' in df.columns:
         da = df['depreciacao_amortizacao'].fillna(0)
         df['ebitda_ytd'] = df['ebit_ytd'] + da
 
-    # EBITDA trimestral — D&A anual ÷ 4 (estimativa)
     if 'ebit_q' in df.columns:
         da_q = df['depreciacao_amortizacao'].fillna(0) / 4.0
         df['ebitda_q'] = df['ebit_q'] + da_q
 
     ok = df['depreciacao_amortizacao'].notna().sum()
-    print(f"  {ok} registros com D&A integrado.")
+    print(f"  [DFC] {ok} registros com D&A integrado com sucesso.")
     return df
 
 
@@ -388,19 +353,16 @@ def main():
     for ano in range(ANO_INICIAL, ANO_FINAL + 1):
         print(f"\nAno {ano}...")
 
-        # Processar DFP primeiro
         df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
         if not df_dfp.empty:
             todos_dfp.append(df_dfp)
             print(f"  DFP: {len(df_dfp)} registros")
 
-        # Processar ITR depois
         df_itr = processar_ano(ano, 'ITR', mapa_tickers, mapa_acoes)
         if not df_itr.empty:
             todos_itr.append(df_itr)
             print(f"  ITR: {len(df_itr)} registros")
 
-        # DFC (apenas uma vez por ano)
         df_dfc_dfp = processar_dfc(ano, 'DFP', mapa_tickers)
         if not df_dfc_dfp.empty:
             todos_dfc.append(df_dfc_dfp)
@@ -416,20 +378,15 @@ def main():
         registrar_carga("ERRO", 0, "Nenhum dado extraído")
         return
 
-    # CORREÇÃO CRÍTICA: Priorizar DFP sobre ITR
-    # Concatenar DFP e ITR separadamente
     if todos_dfp and todos_itr:
         df_dfp_all = pd.concat(todos_dfp, ignore_index=True)
         df_itr_all = pd.concat(todos_itr, ignore_index=True)
         
-        # Remover duplicatas dentro de cada fonte
         df_dfp_all = df_dfp_all.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
         df_itr_all = df_itr_all.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
         
-        # Merge: DFP tem prioridade (usar outer join e depois priorizar DFP)
         df_final = df_dfp_all.copy()
         
-        # Adicionar apenas registros do ITR que NÃO existem no DFP
         df_itr_somente = df_itr_all.merge(
             df_dfp_all[['ticker', 'ano', 'trimestre']],
             on=['ticker', 'ano', 'trimestre'],
@@ -439,7 +396,6 @@ def main():
         df_itr_somente = df_itr_somente[df_itr_somente['_merge'] == 'left_only'].drop(columns=['_merge'])
         
         print(f"\nPriorização: {len(df_dfp_all)} DFP + {len(df_itr_somente)} ITR (exclusivos)")
-        
         df_final = pd.concat([df_final, df_itr_somente], ignore_index=True)
         
     elif todos_dfp:
@@ -447,7 +403,6 @@ def main():
     else:
         df_final = pd.concat(todos_itr, ignore_index=True)
 
-    # Remover coluna fonte se existir
     if 'fonte' in df_final.columns:
         df_final = df_final.drop(columns=['fonte'])
 
