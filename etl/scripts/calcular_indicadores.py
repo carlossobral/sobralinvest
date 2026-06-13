@@ -233,7 +233,11 @@ def calcular_dividendos(df_div: pd.DataFrame):
 
 
 def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
-    print("Calculando CAGR 5 anos (base T4)...")
+    """
+    Cálculo de CAGR otimizado usando operações vetorizadas do Pandas (shift e np.where)
+    em vez de iteração linha a linha, garantindo muito mais performance.
+    """
+    print("Calculando CAGR 5 anos (base T4 - otimizado)...")
 
     data = []
     offset = 0
@@ -259,37 +263,39 @@ def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
     df["receita_liquida_ytd"] = pd.to_numeric(df["receita_liquida_ytd"], errors="coerce")
     df["lucro_liquido_ytd"] = pd.to_numeric(df["lucro_liquido_ytd"], errors="coerce")
 
-    rows = []
-    for ticker, grp in df.groupby("ticker"):
-        grp = grp.sort_values("ano")
-        ano_max = grp["ano"].max()
-        base = grp[grp["ano"] == ano_max - 5]
-        if base.empty:
-            continue
+    # Ordenar para garantir que o shift(5) pegue exatamente 5 anos atrás
+    df = df.sort_values(["ticker", "ano"]).reset_index(drop=True)
 
-        atual = grp[grp["ano"] == ano_max].iloc[0]
-        b = base.iloc[0]
+    # Criar colunas com os valores de 5 anos atrás usando groupby e shift
+    df["rec_5a_ago"] = df.groupby("ticker")["receita_liquida_ytd"].shift(5)
+    df["luc_5a_ago"] = df.groupby("ticker")["lucro_liquido_ytd"].shift(5)
 
-        rec_cagr = (
-            (atual["receita_liquida_ytd"] / b["receita_liquida_ytd"]) ** (1 / 5) - 1
-            if pd.notna(b["receita_liquida_ytd"]) and b["receita_liquida_ytd"] > 0
-            and pd.notna(atual["receita_liquida_ytd"])
-            else None
-        )
-        luc_cagr = (
-            (atual["lucro_liquido_ytd"] / b["lucro_liquido_ytd"]) ** (1 / 5) - 1
-            if pd.notna(b["lucro_liquido_ytd"]) and b["lucro_liquido_ytd"] > 0
-            and pd.notna(atual["lucro_liquido_ytd"])
-            else None
-        )
+    # Manter apenas o ano mais recente de cada ticker
+    df_latest = df.loc[df.groupby("ticker")["ano"].idxmax()].copy()
 
-        rows.append({
-            "ticker": ticker,
-            "cagr_receita_5a": safe_float(rec_cagr),
-            "cagr_lucro_5a": safe_float(luc_cagr),
-        })
+    # Calcular CAGR de forma vetorizada (muito mais rápido que loop)
+    # Condição: base > 0 e valores não nulos
+    mask_rec = (df_latest["rec_5a_ago"] > 0) & (df_latest["receita_liquida_ytd"].notna()) & (df_latest["rec_5a_ago"].notna())
+    mask_luc = (df_latest["luc_5a_ago"] > 0) & (df_latest["lucro_liquido_ytd"].notna()) & (df_latest["luc_5a_ago"].notna())
 
-    result = pd.DataFrame(rows)
+    df_latest["cagr_receita_5a"] = np.where(
+        mask_rec,
+        (df_latest["receita_liquida_ytd"] / df_latest["rec_5a_ago"]) ** (1 / 5) - 1,
+        np.nan
+    )
+
+    df_latest["cagr_lucro_5a"] = np.where(
+        mask_luc,
+        (df_latest["lucro_liquido_ytd"] / df_latest["luc_5a_ago"]) ** (1 / 5) - 1,
+        np.nan
+    )
+
+    result = df_latest[["ticker", "cagr_receita_5a", "cagr_lucro_5a"]].copy()
+    
+    # Aplicar safe_float para garantir limpeza dos dados
+    result["cagr_receita_5a"] = result["cagr_receita_5a"].apply(safe_float)
+    result["cagr_lucro_5a"] = result["cagr_lucro_5a"].apply(safe_float)
+
     print(f"  CAGR calculado para {len(result)} tickers.")
     return result
 
@@ -374,7 +380,7 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         cap_giro = (ac - pc) if (ac is not None and pc is not None) else None
         cap_inv = (pl + div_liq) if pl is not None else None
 
-        rec = {
+        rec_dict = {
             "ticker": row["ticker"],
             "ano": row.get("ano"),
             "data_calculo": row["data_calculo"],
@@ -434,32 +440,25 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             ("graham_br", "preco_justo_graham_br"),
             ("bazin", "preco_justo_bazin"),
         ]:
-            pj = rec.get(campo)
-            rec[f"{metodo}_upside"] = sd((pj / p - 1) * 100 if (pj and p) else None, 1)
+            pj = rec_dict.get(campo)
+            rec_dict[f"{metodo}_upside"] = sd((pj / p - 1) * 100 if (pj and p) else None, 1)
 
         # Lynch
         cagr_luc = safe_float(t("cagr_lucro_5a"))
         if cagr_luc and 0 < cagr_luc <= 0.50 and lpa:
-            rec["preco_justo_lynch"] = safe_float(lpa * (cagr_luc * 100))
-        rec["lynch_upside"] = sd(
-            ((rec["preco_justo_lynch"] / p - 1) * 100
-             if rec["preco_justo_lynch"] and p else None),
+            rec_dict["preco_justo_lynch"] = safe_float(lpa * (cagr_luc * 100))
+            
+        rec_dict["lynch_upside"] = sd(
+            ((rec_dict["preco_justo_lynch"] / p - 1) * 100
+             if rec_dict["preco_justo_lynch"] and p else None),
             1
         )
 
         # AGF
-        pt = rec.get("preco_teto_medio")
-        rec["agf_upside"] = sd(((pt / p - 1) * 100) if (pt and p) else None, 1)
+        pt = rec_dict.get("preco_teto_medio")
+        rec_dict["agf_upside"] = sd(((pt / p - 1) * 100) if (pt and p) else None, 1)
 
-        registros_saida.append(limpar_registro(rec))
-
-    registros_saida = [
-        dict(zip(
-            [k for k in r if k != "rec"],
-            [v for k, v in r.items() if k != "rec"]
-        ))
-        for r in registros_saida
-    ]
+        registros_saida.append(limpar_registro(rec_dict))
 
     print(f"Salvando {len(registros_saida)} registros...")
 
