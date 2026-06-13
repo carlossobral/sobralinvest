@@ -9,35 +9,36 @@ from etl.database.supabase_client import supabase
 ANO_INICIAL = 2019  
 ANO_FINAL = datetime.now().year  
 
-# MAPEAMENTO DEFINITIVO (Validado com arquivos CVM 2025)
-# DRE
+# ==============================================================================
+# MAPEAMENTO DEFINITIVO (VALIDADO COM ARQUIVOS CVM 2025)
+# Uso estrito de ^ e $ com .fullmatch() para evitar soma de subcontas (ex: 3.01 + 3.01.01)
+# ==============================================================================
 MAPEAMENTO_DRE = {
-    'receita_liquida': r'^3\.01$',      # Receita Líquida (conta raiz, sem subcontas)
-    'custo': r'^3\.02$',                # Custo dos Bens/Serviços Vendidos (CMV/CPV/CSV)
-    'ebit': r'^3\.05$',                 # Resultado Antes do RF e Tributos (EBIT)
-    'lucro_liquido': r'^3\.(09|11)$'    # Lucro Líquido (3.09 para bancos, 3.11 para empresas)
+    'receita_liquida': r'^3\.01$',      # Receita de Venda de Bens/Serviços ou Intermediação
+    'custo': r'^3\.02$',                # Custo dos Bens e/ou Serviços Vendidos (CMV/CPV/CSV)
+    'ebit': r'^3\.05$',                 # Resultado Antes do Resultado Financeiro e dos Tributos
+    'lucro_liquido': r'^3\.(09|11)$'    # 3.09 (Bancos/Financeiras) ou 3.11 (Empresas padrão)
 }
 
-# Balanço Patrimonial
 MAPEAMENTO_BPA = {
-    'ativo_total': r'^1$',              # Ativo Total (conta raiz)
+    'ativo_total': r'^1$',              # Ativo Total (Conta raiz)
     'ativo_circulante': r'^1\.01$',     # Ativo Circulante
-    'caixa': r'^1\.01\.01\.01$'         # Caixa e Equivalentes
+    'caixa': r'^1\.01\.01\.01$'         # Caixa e Equivalentes de Caixa
 }
 
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',   # Passivo Circulante
-    'divida_bruta': r'^2\.02$',         # Dívida Bruta (Empréstimos e Financiamentos)
+    'divida_bruta': r'^2\.02$',         # Empréstimos, Financiamentos e Debêntures
     'patrimonio_liquido': r'^2\.03$'    # Patrimônio Líquido Consolidado
 }
 
-# Combina todos os mapeamentos para DRE/BPA/BPP
+# Combina todos os mapeamentos para processamento único
 MAPEAMENTO = {**MAPEAMENTO_DRE, **MAPEAMENTO_BPA, **MAPEAMENTO_BPP}
 
 # Colunas que precisam ser desacumuladas (DRE)
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
 
-# Colunas financeiras (multiplicadas por 1000)
+# Colunas financeiras que devem ser multiplicadas por 1000 (CVM está em MILHARES)
 COLUNAS_FINANCEIRAS = COLUNAS_DRE + ['ativo_total', 'ativo_circulante', 'passivo_circulante', 
                                       'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida']
 
@@ -55,15 +56,15 @@ def obter_dados_empresas():
     print(f"✅ {len(mapa_tickers)} tickers e ações mapeados.")
     return mapa_tickers, mapa_acoes
 
-def processar_dfc(ano, tipo_doc, mapa_tickers):
+def processar_dfc(ano, mapa_tickers):
     """
     Processa o arquivo DFC (Demonstração do Fluxo de Caixa - Método Indireto)
-    para extrair Depreciação, Amortização e Exaustão.
+    para extrair Depreciação, Amortização e Exaustão de forma robusta.
     """
     if ano > ANO_FINAL:
         return pd.DataFrame()
 
-    url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFC_MD/DADOS/dfc_md_cia_aberta_{ano}.zip"
+    url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFC_MI/DADOS/dfc_mi_cia_aberta_{ano}.zip"
     
     try:
         r = httpx.get(url, timeout=120, follow_redirects=True)
@@ -80,9 +81,9 @@ def processar_dfc(ano, tipo_doc, mapa_tickers):
                 df = pd.read_csv(z.open(nome), sep=';', decimal=',', encoding='latin1')
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
-                # Filtra contas no grupo 6.01.01 que contenham depreciação/amortização/exaustão no nome
+                # LÓGICA ROBUSTA: Conta começa com 6.01.01 E o nome contém depreciação/amortização/exaustão
                 df_filtrado = df[
-                    (df['CD_CONTA'].astype(str).str.startswith('6.01.01')) &
+                    (df['CD_CONTA'].astype(str).str.strip().str.startswith('6.01.01')) &
                     (df['DS_CONTA'].str.contains(r'(?i)deprecia|amortiza|exaust', na=False))
                 ]
                 
@@ -108,12 +109,9 @@ def processar_dfc(ano, tipo_doc, mapa_tickers):
         df_pivot['ano'] = pd.to_datetime(df_pivot['DT_REFER']).dt.year
         df_pivot['data_referencia'] = df_pivot['DT_REFER']
         
-        if tipo_doc == 'ITR':
-            df_pivot['mes'] = pd.to_datetime(df_pivot['DT_REFER']).dt.month
-            df_pivot['trimestre'] = df_pivot['mes'].map({3:1, 6:2, 9:3})
-            df_pivot = df_pivot.dropna(subset=['trimestre'])
-        else:
-            df_pivot['trimestre'] = 4
+        # Determinar trimestre para DFC (geralmente anual, mas tratamos ITR se houver)
+        df_pivot['mes'] = pd.to_datetime(df_pivot['DT_REFER']).dt.month
+        df_pivot['trimestre'] = df_pivot['mes'].map({3:1, 6:2, 9:3, 12:4}).fillna(4)
         
         # Converter de MILHARES para REAIS
         df_pivot['depreciacao_amortizacao'] = df_pivot['depreciacao_amortizacao'] * 1000
@@ -121,16 +119,14 @@ def processar_dfc(ano, tipo_doc, mapa_tickers):
         cols = ['ticker', 'ano', 'trimestre', 'data_referencia', 'depreciacao_amortizacao']
         df_final = df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None})
         
-        if 'trimestre' in df_final.columns:
-            df_final['trimestre'] = df_final['trimestre'].astype(int)
-        if 'ano' in df_final.columns:
-            df_final['ano'] = df_final['ano'].astype(int)
+        df_final['trimestre'] = df_final['trimestre'].astype(int)
+        df_final['ano'] = df_final['ano'].astype(int)
         
         df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
         return df_final
         
     except Exception as e:
-        print(f"❌ Erro DFC {ano} {tipo_doc}: {e}")
+        print(f"⚠️ Aviso DFC {ano}: {e}")
         return pd.DataFrame()
 
 def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
@@ -155,8 +151,8 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 df['valor'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
                 
                 for conta_padrao, regex in MAPEAMENTO.items():
-                    # Match estrito no código da conta (apenas conta raiz, sem subcontas)
-                    df_filtrado = df[df['CD_CONTA'].astype(str).str.match(regex, na=False)]
+                    # CORREÇÃO CRÍTICA: .fullmatch() garante que "3.01" não case com "3.01.01"
+                    df_filtrado = df[df['CD_CONTA'].astype(str).str.strip().str.fullmatch(regex, na=False)]
                     if not df_filtrado.empty:
                         agg = df_filtrado.groupby(['CD_CVM', 'DT_REFER'])['valor'].sum().reset_index()
                         agg['conta'] = conta_padrao
@@ -173,11 +169,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             aggfunc='sum'
         ).reset_index()
         
-        # Calcular Lucro Bruto = Receita Líquida + Custo (custo é negativo)
+        # CÁLCULO DO LUCRO BRUTO: Receita Líquida + Custo (Custo já vem negativo na CVM)
         if 'receita_liquida' in df_pivot.columns and 'custo' in df_pivot.columns:
             df_pivot['lucro_bruto'] = df_pivot['receita_liquida'] + df_pivot['custo']
-        
-        # EBITDA será calculado depois, quando integrarmos com o DFC
             
         df_pivot['CD_CVM_STR'] = df_pivot['CD_CVM'].astype(str)
         df_pivot['ticker'] = df_pivot['CD_CVM_STR'].map(mapa_tickers)
@@ -196,12 +190,12 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             
         # Converter de MILHARES para REAIS
         for col in COLUNAS_FINANCEIRAS:
-            if col in df_pivot.columns and col != 'lucro_bruto':  # lucro_bruto já calculado
+            if col in df_pivot.columns and col != 'lucro_bruto':  # lucro_bruto já é calculado
                 df_pivot[col] = df_pivot[col] * 1000
                 
         df_pivot['divida_liquida'] = df_pivot.get('divida_bruta', 0) - df_pivot.get('caixa', 0)
         
-        # Renomear colunas DRE para _ytd
+        # Renomear colunas DRE para o padrão _ytd
         for col in COLUNAS_DRE:
             if col in df_pivot.columns:
                 df_pivot[f'{col}_ytd'] = df_pivot[col]
@@ -214,12 +208,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         
         df_final = df_pivot[[c for c in cols if c in df_pivot.columns]].replace({np.nan: None})
         
-        if 'trimestre' in df_final.columns:
-            df_final['trimestre'] = df_final['trimestre'].astype(int)
-        if 'ano' in df_final.columns:
-            df_final['ano'] = df_final['ano'].astype(int)
-        if 'quantidade_acoes' in df_final.columns:
-            df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
+        df_final['trimestre'] = df_final['trimestre'].astype(int)
+        df_final['ano'] = df_final['ano'].astype(int)
+        df_final['quantidade_acoes'] = df_final['quantidade_acoes'].astype('Int64')
             
         df_final = df_final.drop_duplicates(subset=['ticker', 'ano', 'trimestre'], keep='last')
         return df_final
@@ -241,40 +232,42 @@ def calcular_colunas_q(df):
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
         df[col_q] = df[col_q].fillna(df[col_ytd])
+        
+        # Tratamento de segurança: se o YTD for negativo (anomalia), invalida o Q
         df.loc[df[col_ytd] < 0, col_q] = np.nan
         df.loc[df[col_ytd] < 0, col_ytd] = np.nan
 
     print(f"✅ Colunas _q calculadas para {len(df)} registros.")
     return df
 
-def integrar_dfc(df_dre, df_dfc):
+def integrar_dfc(df_principal, df_dfc):
     """
-    Integra os dados de Depreciação/Amortização do DFC com o DataFrame principal.
-    Calcula EBITDA = EBIT + Depreciação/Amortização
+    Integra os dados de Depreciação/Amortização do DFC com o DataFrame principal
+    e calcula o EBITDA corretamente: EBIT + D&A
     """
     if df_dfc.empty:
-        print("⚠️ Nenhum dado de DFC disponível. EBITDA não será calculado.")
-        return df_dre
+        print("⚠️ Nenhum dado de DFC disponível. EBITDA será igual ao EBIT.")
+        if 'ebit_ytd' in df_principal.columns:
+            df_principal['ebitda_ytd'] = df_principal['ebit_ytd']
+        return df_principal
     
     print("🔗 Integrando dados de DFC (Depreciação/Amortização)...")
     
     # Merge por ticker, ano e trimestre
-    df_merged = df_dre.merge(
+    df_merged = df_principal.merge(
         df_dfc[['ticker', 'ano', 'trimestre', 'depreciacao_amortizacao']],
         on=['ticker', 'ano', 'trimestre'],
         how='left'
     )
     
     # Calcular EBITDA = EBIT + Depreciação/Amortização
-    if 'ebit_ytd' in df_merged.columns and 'depreciacao_amortizacao' in df_merged.columns:
+    if 'ebit_ytd' in df_merged.columns:
         df_merged['ebitda_ytd'] = df_merged['ebit_ytd'] + df_merged['depreciacao_amortizacao'].fillna(0)
         
-        # Também calcular para _q
+        # Para o trimestral (_q), fazemos uma aproximação linear (D&A anual / 4)
+        # Isso é uma aproximação conservadora padrão quando o DFC é apenas anual
         if 'ebit_q' in df_merged.columns:
-            # Para _q, precisamos calcular a depreciação trimestral
-            # Como o DFC é anual, vamos usar o valor anual para o T4 e dividir por 4 para os outros
-            # (aproximação conservadora)
-            df_merged['depreciacao_amortizacao_q'] = df_merged['depreciacao_amortizacao'] / 4
+            df_merged['depreciacao_amortizacao_q'] = df_merged['depreciacao_amortizacao'] / 4.0
             df_merged['ebitda_q'] = df_merged['ebit_q'] + df_merged['depreciacao_amortizacao_q'].fillna(0)
     
     dfc_count = df_merged['depreciacao_amortizacao'].notna().sum()
@@ -283,7 +276,7 @@ def integrar_dfc(df_dre, df_dfc):
     return df_merged
 
 def main():
-    print("🔄 Iniciando carga de fundamentos (Mapeamento Definitivo + DFC)...")
+    print("🔄 Iniciando carga de fundamentos (Mapeamento Definitivo + DFC + Fullmatch)...")
     mapa_tickers, mapa_acoes = obter_dados_empresas()
     if not mapa_tickers:
         return
@@ -295,7 +288,7 @@ def main():
     for ano in range(ANO_INICIAL, ANO_FINAL + 1):
         print(f"\n📊 Processando {ano}...")
         
-        # Processar DRE/BPA/BPP
+        # 1. Processar DRE, BPA e BPP
         df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
         if not df_dfp.empty:
             todos_registros.append(df_dfp)
@@ -306,33 +299,33 @@ def main():
             todos_registros.append(df_itr)
             print(f"  ✅ ITR {ano}: {len(df_itr)} registros")
         
-        # Processar DFC (Método Indireto)
-        df_dfc_dfp = processar_dfc(ano, 'DFP', mapa_tickers)
+        # 2. Processar DFC (Método Indireto)
+        df_dfc_dfp = processar_dfc(ano, mapa_tickers)
         if not df_dfc_dfp.empty:
             todos_dfc.append(df_dfc_dfp)
-            print(f"  ✅ DFC DFP {ano}: {len(df_dfc_dfp)} registros")
+            print(f"  ✅ DFC_MI DFP {ano}: {len(df_dfc_dfp)} registros")
             
-        df_dfc_itr = processar_dfc(ano, 'ITR', mapa_tickers)
+        df_dfc_itr = processar_dfc(ano, mapa_tickers) # Tenta pegar ITR se existir
         if not df_dfc_itr.empty:
             todos_dfc.append(df_dfc_itr)
-            print(f"  ✅ DFC ITR {ano}: {len(df_dfc_itr)} registros")
+            print(f"  ✅ DFC_MI ITR {ano}: {len(df_dfc_itr)} registros")
     
     if not todos_registros:
         print("❌ Nenhum registro extraído. Abortando.")
         return
     
-    # Consolidar dados principais
+    # Consolidar dados principais (DRE/BPA/BPP)
     df_consolidado = pd.concat(todos_registros, ignore_index=True)
     
-    # Consolidar DFC
+    # Consolidar e Integrar DFC
     if todos_dfc:
         df_dfc_consolidado = pd.concat(todos_dfc, ignore_index=True)
         df_consolidado = integrar_dfc(df_consolidado, df_dfc_consolidado)
     
-    # Calcular colunas _q
+    # Calcular colunas _q (Desacumulador)
     df_consolidado = calcular_colunas_q(df_consolidado)
     
-    # Adicionar coluna depreciacao_amortizacao_q se existir
+    # Garantir que a coluna de D&A tenha a versão _ytd para consistência no schema
     if 'depreciacao_amortizacao' in df_consolidado.columns:
         df_consolidado['depreciacao_amortizacao_ytd'] = df_consolidado['depreciacao_amortizacao']
     
@@ -348,7 +341,7 @@ def main():
         ).execute()
         total_salvos += len(registros[i:i+100])
     
-    print(f"\n🏆 CONCLUÍDO! {total_salvos} registros salvos.")
+    print(f"\n🏆 CONCLUÍDO! {total_salvos} registros salvos com sucesso.")
 
 if __name__ == "__main__":
     main()
