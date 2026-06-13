@@ -68,6 +68,9 @@ def obter_dados_empresas():
 
 
 def extrair_lucro_liquido(df):
+    """
+    Regra: usa 3.11 se existir, senão 3.09. Nunca soma os dois.
+    """
     df311 = df[df['CD_CONTA'].str.fullmatch(r'^3\.11$', na=False)].copy()
     df309 = df[df['CD_CONTA'].str.fullmatch(r'^3\.09$', na=False)].copy()
 
@@ -78,16 +81,21 @@ def extrair_lucro_liquido(df):
     df309_agg.columns = ['CD_CVM', 'DT_REFER', 'lucro_liquido_309']
 
     merged = df311_agg.merge(df309_agg, on=['CD_CVM', 'DT_REFER'], how='outer')
+    
+    # Prioriza 3.11. Se for nulo, usa 3.09.
     merged['lucro_liquido'] = merged['lucro_liquido'].combine_first(merged['lucro_liquido_309'])
     return merged[['CD_CVM', 'DT_REFER', 'lucro_liquido']].set_index(['CD_CVM', 'DT_REFER'])
 
 
 def extrair_depreciacao_amortizacao(df):
-    """Extrai D&A do DFC Método Indireto."""
+    """
+    Extrai D&A do DFC Método Indireto.
+    Mantém o valor POSITIVO conforme a fonte original da CVM.
+    """
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     df['DS_CONTA_STR'] = df['DS_CONTA'].astype(str).str.strip().str.lower()
     
-    # Filtro robusto para D&A
+    # Filtro robusto: conta começa com 6.01.01 E descrição contém deprecia, amortiza ou exaust
     mask_da = (
         df['CD_CONTA_STR'].str.startswith('6.01.01') &
         (df['DS_CONTA_STR'].str.contains('deprecia', na=False) | 
@@ -99,7 +107,9 @@ def extrair_depreciacao_amortizacao(df):
     if df_da.empty:
         return pd.DataFrame()
     
+    # Soma os valores e garante que seja positivo (abs) para evitar anomalias de sinal
     agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg['VL_CONTA'] = agg['VL_CONTA'].abs() 
     agg.columns = ['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']
     return agg.set_index(['CD_CVM', 'DT_REFER'])
 
@@ -134,9 +144,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             dre_csv  = [n for n in csvs_con if '_DRE_' in n.upper()]
             bpa_csv  = [n for n in csvs_con if '_BPA_' in n.upper()]
             bpp_csv  = [n for n in csvs_con if '_BPP_' in n.upper()]
-            dfc_csv  = [n for n in csvs_con if '_DFC_MI_' in n.upper()]  # NOVO: DFC Método Indireto
+            dfc_csv  = [n for n in csvs_con if '_DFC_MI_' in n.upper()]  # DFC Método Indireto
 
-            # DRE
+            # 1. Processar DRE
             for nome in dre_csv:
                 df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
@@ -160,7 +170,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 else:
                     resultado['lucro_liquido'] = resultado['lucro_liquido'].combine_first(ll)
 
-            # BPA
+            # 2. Processar BPA
             for nome in bpa_csv:
                 df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
@@ -173,7 +183,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 for conta, frame in frames.items():
                     resultado[conta] = frame
 
-            # BPP
+            # 3. Processar BPP
             for nome in bpp_csv:
                 df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
@@ -186,7 +196,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 for conta, frame in frames.items():
                     resultado[conta] = frame
 
-            # DFC (NOVO: Processar D&A dentro do mesmo loop)
+            # 4. Processar DFC_MI (Depreciação e Amortização)
             for nome in dfc_csv:
                 df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
@@ -208,25 +218,29 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
+        # Lucro bruto = receita + custo (custo já é negativo na fonte)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
             df_final['lucro_bruto'] = df_final['receita_liquida'] + df_final['custo']
 
-        # EBITDA = EBIT + D&A (NOVO: Agora com D&A real do DFC)
+        # EBITDA = EBIT + D&A (AMBOS POSITIVOS, PORTANTO SOMA)
         if 'ebit' in df_final.columns:
             da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
             df_final['ebitda'] = df_final['ebit'] + da
 
+        # Converter MILHARES → REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
 
-        # D&A também precisa ser multiplicada por 1000
+        # D&A também precisa ser multiplicada por 1000 (já está positiva)
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
+        # Dívida líquida
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
 
+        # Mapear ticker
         df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
         df_final['ticker'] = df_final['CD_CVM_STR'].map(mapa_tickers)
         df_final['quantidade_acoes'] = df_final['CD_CVM_STR'].map(mapa_acoes)
@@ -246,6 +260,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         else:
             df_final['trimestre'] = 4
 
+        # Renomear DRE → _ytd
         for col in COLUNAS_DRE:
             if col in df_final.columns:
                 df_final[f'{col}_ytd'] = df_final[col]
@@ -255,7 +270,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             ['ticker', 'ano', 'trimestre', 'data_referencia']
             + [f'{c}_ytd' for c in COLUNAS_DRE if f'{c}_ytd' in df_final.columns]
             + [c for c in COLUNAS_BAL if c in df_final.columns]
-            + ['depreciacao_amortizacao']  # NOVO: Incluir D&A na saída
+            + ['depreciacao_amortizacao']  # Inclui D&A na saída
             + ['quantidade_acoes']
         )
 
@@ -286,6 +301,7 @@ def calcular_colunas_q(df):
 
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
+        # T1: diff é NaN → usa o próprio YTD
         df[col_q] = df[col_q].fillna(df[col_ytd])
 
     print(f"  {len(df)} registros processados.")
@@ -320,6 +336,7 @@ def main():
         registrar_carga("ERRO", 0, "Nenhum dado extraído")
         return
 
+    # Priorização: DFP tem precedência sobre ITR
     if todos_dfp and todos_itr:
         df_dfp_all = pd.concat(todos_dfp, ignore_index=True)
         df_itr_all = pd.concat(todos_itr, ignore_index=True)
@@ -329,6 +346,7 @@ def main():
         
         df_final = df_dfp_all.copy()
         
+        # Adicionar apenas registros do ITR que NÃO existem no DFP
         df_itr_somente = df_itr_all.merge(
             df_dfp_all[['ticker', 'ano', 'trimestre']],
             on=['ticker', 'ano', 'trimestre'],
