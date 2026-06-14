@@ -156,7 +156,10 @@ def extrair_patrimonio_liquido(df):
     # Mantém apenas a de maior prioridade (menor número) para cada empresa/data
     df_pl = df_pl.drop_duplicates(subset=['CD_CVM', 'DT_REFER'], keep='first')
     
-    return df_pl[['CD_CVM', 'DT_REFER', 'VL_CONTA']].rename(columns={'VL_CONTA': 'patrimonio_liquido'}).set_index(['CD_CVM', 'DT_REFER'])def extrair_depreciacao_amortizacao(df):
+    return df_pl[['CD_CVM', 'DT_REFER', 'VL_CONTA']].rename(columns={'VL_CONTA': 'patrimonio_liquido'}).set_index(['CD_CVM', 'DT_REFER'])
+
+
+def extrair_depreciacao_amortizacao(df):
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
