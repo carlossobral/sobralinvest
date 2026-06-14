@@ -117,64 +117,43 @@ def extrair_depreciacao_amortizacao(df):
 
 def extrair_patrimonio_liquido(df):
     """
-    Extrai Patrimônio Líquido usando estratégia em cascata para diferentes tipos de empresas.
-    
-    PASSO 1: Conta 2.03 com descrição "Patrimônio Líquido Consolidado" (95% das empresas)
-    PASSO 2: Conta 2.08 com descrição "Patrimônio Líquido Consolidado" (ITAÚ)
-    PASSO 3: Conta 2.07 com descrição "Patrimônio Líquido Consolidado" (PINE, DAYCOVAL)
-    PASSO 4: Soma das contas 2.07.01 + 2.07.02 (SANTANDER, RCI, BANESTES)
-    PASSO 5: Retorna DataFrame vazio (fallback será aplicado depois)
+    Extrai PL com lógica resiliente. Remove acentos/espaços e usa fallback seguro.
     """
+    df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-    df['DS_CONTA_STR'] = df['DS_CONTA'].astype(str).str.strip()
-    
-    # PASSO 1: Buscar 2.03 com descrição "Patrimônio Líquido Consolidado"
-    mask_203 = (
-        df['CD_CONTA_STR'].str.fullmatch(r'^2\.03$', na=False) &
-        df['DS_CONTA_STR'].str.contains('Patrimônio Líquido Consolidado', na=False, case=False)
-    )
-    df_203 = df[mask_203]
-    
-    if not df_203.empty:
-        agg = df_203.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
-        return agg.set_index(['CD_CVM', 'DT_REFER'])
-    
-    # PASSO 2: Buscar 2.08 com descrição "Patrimônio Líquido Consolidado"
-    mask_208 = (
-        df['CD_CONTA_STR'].str.fullmatch(r'^2\.08$', na=False) &
-        df['DS_CONTA_STR'].str.contains('Patrimônio Líquido Consolidado', na=False, case=False)
-    )
-    df_208 = df[mask_208]
-    
-    if not df_208.empty:
-        agg = df_208.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
-        return agg.set_index(['CD_CVM', 'DT_REFER'])
-    
-    # PASSO 3: Buscar 2.07 com descrição "Patrimônio Líquido Consolidado"
-    mask_207 = (
-        df['CD_CONTA_STR'].str.fullmatch(r'^2\.07$', na=False) &
-        df['DS_CONTA_STR'].str.contains('Patrimônio Líquido Consolidado', na=False, case=False)
-    )
-    df_207 = df[mask_207]
-    
-    if not df_207.empty:
-        agg = df_207.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
-        return agg.set_index(['CD_CVM', 'DT_REFER'])
-    
-    # PASSO 4: Buscar 2.07.01 + 2.07.02 e somar
-    mask_20701 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.07\.01$', na=False)
-    mask_20702 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.07\.02$', na=False)
-    df_207_sub = df[mask_20701 | mask_20702]
-    
-    if not df_207_sub.empty:
-        agg = df_207_sub.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
-        return agg.set_index(['CD_CVM', 'DT_REFER'])
-    
-    # PASSO 5: Retorna DataFrame vazio (fallback será aplicado depois)
+    # Normaliza descrição para evitar falhas por encoding/acento
+    df['DS_NORM'] = df['DS_CONTA'].astype(str).str.strip().str.lower()
+    df['DS_NORM'] = (df['DS_NORM'].str.normalize('NFKD')
+                     .str.encode('ascii', errors='ignore')
+                     .str.decode('utf-8'))
+
+    # PASSO 1: 2.03 (Padrão)
+    mask_203 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.03$', na=False) & \
+               df['DS_NORM'].str.contains('patrimonio liquido', na=False)
+    if df[mask_203].shape[0] > 0:
+        return df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
+    # PASSO 2: 2.08 (Bancos grandes)
+    mask_208 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.08$', na=False) & \
+               df['DS_NORM'].str.contains('patrimonio liquido', na=False)
+    if df[mask_208].shape[0] > 0:
+        return df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
+    # PASSO 3: 2.07 (Bancos médios)
+    mask_207 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.07$', na=False) & \
+               df['DS_NORM'].str.contains('patrimonio liquido', na=False)
+    if df[mask_207].shape[0] > 0:
+        return df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
+    # PASSO 4: 2.07.01 + 2.07.02
+    mask_sub = df['CD_CONTA_STR'].str.match(r'^2\.07\.0[12]$', na=False)
+    if df[mask_sub].shape[0] > 0:
+        return df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
     return pd.DataFrame()
 
 
@@ -292,11 +271,14 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
-        # Fallback matemático para Patrimônio Líquido (PASSO 5)
+        # Fallback matemático: PL = Ativo Total - Passivo Circulante - Dívida Bruta (aproximação se PL vier nulo)
         if 'patrimonio_liquido' not in df_final.columns or df_final['patrimonio_liquido'].isna().all():
-            if 'ativo_total' in df_final.columns and 'passivo_total' in df_final.columns:
-                print(f"    ⚠️  Aplicando fallback matemático: PL = Ativo - Passivo")
-                df_final['patrimonio_liquido'] = df_final['ativo_total'] - df_final['passivo_total']
+            if 'ativo_total' in df_final.columns and 'passivo_circulante' in df_final.columns and 'divida_bruta' in df_final.columns:
+                print("    ⚠️ Aplicando fallback matemático: PL ≈ Ativo - (PC + DB)")
+                df_final['patrimonio_liquido'] = df_final['ativo_total'] - (
+                    df_final['passivo_circulante'].fillna(0) + 
+                    df_final['divida_bruta'].fillna(0)
+                )
 
         # Lucro bruto = receita + custo (custo já é negativo na fonte)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
@@ -381,6 +363,7 @@ def calcular_colunas_q(df):
 
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
+        # T1: diff é NaN → usa o próprio YTD
         df[col_q] = df[col_q].fillna(df[col_ytd])
 
     print(f"  {len(df)} registros processados.")
