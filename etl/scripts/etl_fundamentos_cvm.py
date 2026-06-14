@@ -22,11 +22,9 @@ MAPEAMENTO_BPA = {
     'caixa':            r'^1\.01\.01\.01$',
 }
 
-# Mapeamento BPP ajustado (sem patrimonio_liquido, será extraído dinamicamente)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
     'divida_bruta':       r'^2\.02$',
-    'passivo_total':      r'^2$',  # Adicionado para fallback
 }
 
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
@@ -88,73 +86,63 @@ def extrair_lucro_liquido(df):
     return merged[['CD_CVM', 'DT_REFER', 'lucro_liquido']].set_index(['CD_CVM', 'DT_REFER'])
 
 
-def extrair_depreciacao_amortizacao(df):
-    """
-    Extrai D&A do DFC Método Indireto.
-    Mantém o valor POSITIVO conforme a fonte original da CVM.
-    """
-    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-    df['DS_CONTA_STR'] = df['DS_CONTA'].astype(str).str.strip().str.lower()
-    
-    # Filtro robusto: conta começa com 6.01.01 E descrição contém deprecia, amortiza ou exaust
-    mask_da = (
-        df['CD_CONTA_STR'].str.startswith('6.01.01') &
-        (df['DS_CONTA_STR'].str.contains('deprecia', na=False) | 
-         df['DS_CONTA_STR'].str.contains('amortiza', na=False) |
-         df['DS_CONTA_STR'].str.contains('exaust', na=False))
-    )
-    df_da = df[mask_da]
-    
-    if df_da.empty:
-        return pd.DataFrame()
-    
-    # Soma os valores e garante que seja positivo (abs) para evitar anomalias de sinal
-    agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-    agg['VL_CONTA'] = agg['VL_CONTA'].abs() 
-    agg.columns = ['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']
-    return agg.set_index(['CD_CVM', 'DT_REFER'])
-
-
 def extrair_patrimonio_liquido(df):
     """
-    Extrai PL com lógica resiliente. Remove acentos/espaços e usa fallback seguro.
+    Regra: usa 2.03 se existir, senão 2.08, senão 2.07. (Mesma lógica da conta 3)
     """
-    df = df.copy()
-    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-    # Normaliza descrição para evitar falhas por encoding/acento
-    df['DS_NORM'] = df['DS_CONTA'].astype(str).str.strip().str.lower()
-    df['DS_NORM'] = (df['DS_NORM'].str.normalize('NFKD')
-                     .str.encode('ascii', errors='ignore')
-                     .str.decode('utf-8'))
+    # 1. Tenta 2.03 (Padrão)
+    df_203 = df[df['CD_CONTA'].str.fullmatch(r'^2\.03$', na=False)].copy()
+    agg_203 = df_203.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+    agg_203.columns = ['CD_CVM', 'DT_REFER', 'pl_203']
 
-    # PASSO 1: 2.03 (Padrão)
-    mask_203 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.03$', na=False) & \
-               df['DS_NORM'].str.contains('patrimonio liquido', na=False)
-    if df[mask_203].shape[0] > 0:
-        return df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+    # 2. Tenta 2.08 (Bancos grandes como ITUB4)
+    df_208 = df[df['CD_CONTA'].str.fullmatch(r'^2\.08$', na=False)].copy()
+    agg_208 = df_208.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+    agg_208.columns = ['CD_CVM', 'DT_REFER', 'pl_208']
 
-    # PASSO 2: 2.08 (Bancos grandes)
-    mask_208 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.08$', na=False) & \
-               df['DS_NORM'].str.contains('patrimonio liquido', na=False)
-    if df[mask_208].shape[0] > 0:
-        return df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+    # 3. Tenta 2.07 (Bancos médios)
+    df_207 = df[df['CD_CONTA'].str.fullmatch(r'^2\.07$', na=False)].copy()
+    agg_207 = df_207.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+    agg_207.columns = ['CD_CVM', 'DT_REFER', 'pl_207']
 
-    # PASSO 3: 2.07 (Bancos médios)
-    mask_207 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.07$', na=False) & \
-               df['DS_NORM'].str.contains('patrimonio liquido', na=False)
-    if df[mask_207].shape[0] > 0:
-        return df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+    # Merge em cascata (igual ao lucro líquido)
+    merged = agg_203.merge(agg_208, on=['CD_CVM', 'DT_REFER'], how='outer')
+    merged = merged.merge(agg_207, on=['CD_CVM', 'DT_REFER'], how='outer')
 
-    # PASSO 4: 2.07.01 + 2.07.02
-    mask_sub = df['CD_CONTA_STR'].str.match(r'^2\.07\.0[12]$', na=False)
-    if df[mask_sub].shape[0] > 0:
-        return df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+    # Prioriza 2.03 > 2.08 > 2.07
+    merged['patrimonio_liquido'] = merged['pl_203'].combine_first(merged['pl_208']).combine_first(merged['pl_207'])
+    
+    return merged[['CD_CVM', 'DT_REFER', 'patrimonio_liquido']].set_index(['CD_CVM', 'DT_REFER'])
 
-    return pd.DataFrame()
+
+def extrair_depreciacao_amortizacao(df):
+    """
+    Regra: usa 6.01.01.04 se existir, senão 6.01.01.02, senão 6.01.01.05. (Mesma lógica da conta 3)
+    """
+    # 1. Tenta 6.01.01.04 (Mais comum: Depreciação, depleção e amortização)
+    df_604 = df[df['CD_CONTA'].str.fullmatch(r'^6\.01\.01\.04$', na=False)].copy()
+    agg_604 = df_604.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg_604.columns = ['CD_CVM', 'DT_REFER', 'da_604']
+
+    # 2. Tenta 6.01.01.02 (Depreciação e Amortização)
+    df_602 = df[df['CD_CONTA'].str.fullmatch(r'^6\.01\.01\.02$', na=False)].copy()
+    agg_602 = df_602.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg_602.columns = ['CD_CVM', 'DT_REFER', 'da_602']
+
+    # 3. Tenta 6.01.01.05 (Depreciação e amortização)
+    df_605 = df[df['CD_CONTA'].str.fullmatch(r'^6\.01\.01\.05$', na=False)].copy()
+    agg_605 = df_605.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg_605.columns = ['CD_CVM', 'DT_REFER', 'da_605']
+
+    # Merge em cascata
+    merged = agg_604.merge(agg_602, on=['CD_CVM', 'DT_REFER'], how='outer')
+    merged = merged.merge(agg_605, on=['CD_CVM', 'DT_REFER'], how='outer')
+
+    # Prioriza 604 > 602 > 605 e garante que seja positivo (abs)
+    merged['depreciacao_amortizacao'] = merged['da_604'].combine_first(merged['da_602']).combine_first(merged['da_605'])
+    merged['depreciacao_amortizacao'] = merged['depreciacao_amortizacao'].abs()
+    
+    return merged[['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']].set_index(['CD_CVM', 'DT_REFER'])
 
 
 def processar_csv_dre(df_csv, mapeamento):
@@ -236,12 +224,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     df = df[norm == 'ULTIMO']
                 
-                # Extrair contas padrão do BPP (passivo circulante, dívida bruta, passivo total)
                 frames = processar_csv_dre(df, MAPEAMENTO_BPP)
                 for conta, frame in frames.items():
                     resultado[conta] = frame
                 
-                # Extrair Patrimônio Líquido usando estratégia em cascata
+                # Extrair Patrimônio Líquido usando a mesma lógica da conta 3
                 pl = extrair_patrimonio_liquido(df)
                 if not pl.empty:
                     if 'patrimonio_liquido' not in resultado:
@@ -271,7 +258,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
-        # Fallback matemático: PL = Ativo Total - Passivo Circulante - Dívida Bruta (aproximação se PL vier nulo)
+        # Fallback matemático: PL = Ativo Total - Passivo Circulante - Dívida Bruta (apenas se ainda estiver nulo)
         if 'patrimonio_liquido' not in df_final.columns or df_final['patrimonio_liquido'].isna().all():
             if 'ativo_total' in df_final.columns and 'passivo_circulante' in df_final.columns and 'divida_bruta' in df_final.columns:
                 print("    ⚠️ Aplicando fallback matemático: PL ≈ Ativo - (PC + DB)")
