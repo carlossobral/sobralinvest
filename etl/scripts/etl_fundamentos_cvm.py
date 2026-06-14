@@ -22,9 +22,11 @@ MAPEAMENTO_BPA = {
     'caixa':            r'^1\.01\.01\.01$',
 }
 
+# Mapeamento BPP ajustado (passivo_total adicionado para fallback matemático)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
     'divida_bruta':       r'^2\.02$',
+    'passivo_total':      r'^2$',
 }
 
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
@@ -67,9 +69,6 @@ def obter_dados_empresas():
 
 
 def extrair_lucro_liquido(df):
-    """
-    Regra: usa 3.11 se existir, senão 3.09. Nunca soma os dois.
-    """
     df311 = df[df['CD_CONTA'].str.fullmatch(r'^3\.11$', na=False)].copy()
     df309 = df[df['CD_CONTA'].str.fullmatch(r'^3\.09$', na=False)].copy()
 
@@ -80,65 +79,78 @@ def extrair_lucro_liquido(df):
     df309_agg.columns = ['CD_CVM', 'DT_REFER', 'lucro_liquido_309']
 
     merged = df311_agg.merge(df309_agg, on=['CD_CVM', 'DT_REFER'], how='outer')
-    
-    # Prioriza 3.11. Se for nulo, usa 3.09.
     merged['lucro_liquido'] = merged['lucro_liquido'].combine_first(merged['lucro_liquido_309'])
     return merged[['CD_CVM', 'DT_REFER', 'lucro_liquido']].set_index(['CD_CVM', 'DT_REFER'])
 
 
 def extrair_patrimonio_liquido(df):
     """
-    Regra: usa 2.03 se existir, senão 2.08, senão 2.07. (Mesma lógica da conta 3)
+    Extrai PL usando Regex à prova de acentos e maiúsculas/minúsculas.
+    A regex r'(?i)patrim[oó]nio\s+l[ií]quido' encontra:
+    - Patrimonio ou Patrimônio
+    - Liquido ou Líquido
     """
-    # 1. Tenta 2.03 (Padrão)
-    df_203 = df[df['CD_CONTA'].str.fullmatch(r'^2\.03$', na=False)].copy()
-    agg_203 = df_203.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-    agg_203.columns = ['CD_CVM', 'DT_REFER', 'pl_203']
-
-    # 2. Tenta 2.08 (Bancos grandes como ITUB4)
-    df_208 = df[df['CD_CONTA'].str.fullmatch(r'^2\.08$', na=False)].copy()
-    agg_208 = df_208.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-    agg_208.columns = ['CD_CVM', 'DT_REFER', 'pl_208']
-
-    # 3. Tenta 2.07 (Bancos médios)
-    df_207 = df[df['CD_CONTA'].str.fullmatch(r'^2\.07$', na=False)].copy()
-    agg_207 = df_207.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-    agg_207.columns = ['CD_CVM', 'DT_REFER', 'pl_207']
-
-    # Merge em cascata (igual ao lucro líquido)
-    merged = agg_203.merge(agg_208, on=['CD_CVM', 'DT_REFER'], how='outer')
-    merged = merged.merge(agg_207, on=['CD_CVM', 'DT_REFER'], how='outer')
-
-    # Prioriza 2.03 > 2.08 > 2.07
-    merged['patrimonio_liquido'] = merged['pl_203'].combine_first(merged['pl_208']).combine_first(merged['pl_207'])
+    df = df.copy()
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
-    return merged[['CD_CVM', 'DT_REFER', 'patrimonio_liquido']].set_index(['CD_CVM', 'DT_REFER'])
+    # Regex robusta: (?i) ignora case, [oó] pega com ou sem acento, \s+ pega espaços
+    regex_pl = r'(?i)patrim[oó]nio\s+l[ií]quido'
+    
+    # PASSO 1: 2.03 (Padrão)
+    mask_203 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.03$', na=False) & df['DS_CONTA'].str.contains(regex_pl, regex=True, na=False)
+    if df[mask_203].shape[0] > 0:
+        return df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
+    # PASSO 2: 2.08 (Bancos grandes como ITUB4)
+    mask_208 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.08$', na=False) & df['DS_CONTA'].str.contains(regex_pl, regex=True, na=False)
+    if df[mask_208].shape[0] > 0:
+        return df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
+    # PASSO 3: 2.07 (Bancos médios)
+    mask_207 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.07$', na=False) & df['DS_CONTA'].str.contains(regex_pl, regex=True, na=False)
+    if df[mask_207].shape[0] > 0:
+        return df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
+    # PASSO 4: 2.07.01 + 2.07.02 (Soma, pois são partes do todo para alguns bancos)
+    mask_sub = df['CD_CONTA_STR'].str.match(r'^2\.07\.0[12]$', na=False)
+    if df[mask_sub].shape[0] > 0:
+        return df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+
+    return pd.DataFrame()
 
 
 def extrair_depreciacao_amortizacao(df):
-    """
-    Regra: usa 6.01.01.04 se existir, senão 6.01.01.02, senão 6.01.01.05. (Mesma lógica da conta 3)
-    """
-    # 1. Tenta 6.01.01.04 (Mais comum: Depreciação, depleção e amortização)
-    df_604 = df[df['CD_CONTA'].str.fullmatch(r'^6\.01\.01\.04$', na=False)].copy()
-    agg_604 = df_604.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-    agg_604.columns = ['CD_CVM', 'DT_REFER', 'da_604']
+    df = df.copy()
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    
+    df_604 = df[df['CD_CONTA_STR'] == '6.01.01.04'].copy()
+    if not df_604.empty:
+        agg_604 = df_604.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+        agg_604.columns = ['CD_CVM', 'DT_REFER', 'da_604']
+    else:
+        agg_604 = pd.DataFrame(columns=['CD_CVM', 'DT_REFER', 'da_604'])
 
-    # 2. Tenta 6.01.01.02 (Depreciação e Amortização)
-    df_602 = df[df['CD_CONTA'].str.fullmatch(r'^6\.01\.01\.02$', na=False)].copy()
-    agg_602 = df_602.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-    agg_602.columns = ['CD_CVM', 'DT_REFER', 'da_602']
+    df_602 = df[df['CD_CONTA_STR'] == '6.01.01.02'].copy()
+    if not df_602.empty:
+        agg_602 = df_602.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+        agg_602.columns = ['CD_CVM', 'DT_REFER', 'da_602']
+    else:
+        agg_602 = pd.DataFrame(columns=['CD_CVM', 'DT_REFER', 'da_602'])
 
-    # 3. Tenta 6.01.01.05 (Depreciação e amortização)
-    df_605 = df[df['CD_CONTA'].str.fullmatch(r'^6\.01\.01\.05$', na=False)].copy()
-    agg_605 = df_605.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-    agg_605.columns = ['CD_CVM', 'DT_REFER', 'da_605']
+    df_605 = df[df['CD_CONTA_STR'] == '6.01.01.05'].copy()
+    if not df_605.empty:
+        agg_605 = df_605.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+        agg_605.columns = ['CD_CVM', 'DT_REFER', 'da_605']
+    else:
+        agg_605 = pd.DataFrame(columns=['CD_CVM', 'DT_REFER', 'da_605'])
 
-    # Merge em cascata
     merged = agg_604.merge(agg_602, on=['CD_CVM', 'DT_REFER'], how='outer')
     merged = merged.merge(agg_605, on=['CD_CVM', 'DT_REFER'], how='outer')
 
-    # Prioriza 604 > 602 > 605 e garante que seja positivo (abs)
     merged['depreciacao_amortizacao'] = merged['da_604'].combine_first(merged['da_602']).combine_first(merged['da_605'])
     merged['depreciacao_amortizacao'] = merged['depreciacao_amortizacao'].abs()
     
@@ -228,7 +240,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 for conta, frame in frames.items():
                     resultado[conta] = frame
                 
-                # Extrair Patrimônio Líquido usando a mesma lógica da conta 3
+                # Extrair Patrimônio Líquido com a nova lógica à prova de acentos
                 pl = extrair_patrimonio_liquido(df)
                 if not pl.empty:
                     if 'patrimonio_liquido' not in resultado:
@@ -236,7 +248,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     else:
                         resultado['patrimonio_liquido'] = resultado['patrimonio_liquido'].combine_first(pl)
 
-            # 4. Processar DFC_MI (Depreciação e Amortização)
+            # 4. Processar DFC_MI
             for nome in dfc_csv:
                 df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
@@ -258,38 +270,29 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
-        # Fallback matemático: PL = Ativo Total - Passivo Circulante - Dívida Bruta (apenas se ainda estiver nulo)
+        # Fallback matemático: PL = Ativo Total - Passivo Total
         if 'patrimonio_liquido' not in df_final.columns or df_final['patrimonio_liquido'].isna().all():
-            if 'ativo_total' in df_final.columns and 'passivo_circulante' in df_final.columns and 'divida_bruta' in df_final.columns:
-                print("    ⚠️ Aplicando fallback matemático: PL ≈ Ativo - (PC + DB)")
-                df_final['patrimonio_liquido'] = df_final['ativo_total'] - (
-                    df_final['passivo_circulante'].fillna(0) + 
-                    df_final['divida_bruta'].fillna(0)
-                )
+            if 'ativo_total' in df_final.columns and 'passivo_total' in df_final.columns:
+                print("    ⚠️ Aplicando fallback matemático: PL = Ativo Total - Passivo Total")
+                df_final['patrimonio_liquido'] = df_final['ativo_total'] - df_final['passivo_total']
 
-        # Lucro bruto = receita + custo (custo já é negativo na fonte)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
             df_final['lucro_bruto'] = df_final['receita_liquida'] + df_final['custo']
 
-        # EBITDA = EBIT + D&A (AMBOS POSITIVOS, PORTANTO SOMA)
         if 'ebit' in df_final.columns:
             da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
             df_final['ebitda'] = df_final['ebit'] + da
 
-        # Converter MILHARES → REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
 
-        # D&A também precisa ser multiplicada por 1000 (já está positiva)
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
-        # Dívida líquida
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
 
-        # Mapear ticker
         df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
         df_final['ticker'] = df_final['CD_CVM_STR'].map(mapa_tickers)
         df_final['quantidade_acoes'] = df_final['CD_CVM_STR'].map(mapa_acoes)
@@ -309,7 +312,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         else:
             df_final['trimestre'] = 4
 
-        # Renomear DRE → _ytd
         for col in COLUNAS_DRE:
             if col in df_final.columns:
                 df_final[f'{col}_ytd'] = df_final[col]
@@ -350,7 +352,6 @@ def calcular_colunas_q(df):
 
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
-        # T1: diff é NaN → usa o próprio YTD
         df[col_q] = df[col_q].fillna(df[col_ytd])
 
     print(f"  {len(df)} registros processados.")
@@ -385,7 +386,6 @@ def main():
         registrar_carga("ERRO", 0, "Nenhum dado extraído")
         return
 
-    # Priorização: DFP tem precedência sobre ITR
     if todos_dfp and todos_itr:
         df_dfp_all = pd.concat(todos_dfp, ignore_index=True)
         df_itr_all = pd.concat(todos_itr, ignore_index=True)
