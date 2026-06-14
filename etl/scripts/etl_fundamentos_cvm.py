@@ -6,7 +6,7 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-ANO_INICIAL = 2019
+ANO_INICIAL = 2024
 ANO_FINAL = datetime.now().year
 
 # Contas validadas
@@ -22,7 +22,7 @@ MAPEAMENTO_BPA = {
     'caixa':            r'^1\.01\.01\.01$',
 }
 
-# Mapeamento BPP ajustado (passivo_total adicionado para garantir escala correta)
+# Mapeamento BPP ajustado (passivo_total adicionado para garantir escala correta e fallback)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
     'divida_bruta':       r'^2\.02$',
@@ -30,7 +30,7 @@ MAPEAMENTO_BPP = {
 }
 
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
-# Bug 2 corrigido: passivo_total adicionado à lista para receber a multiplicação por 1000
+# passivo_total adicionado aqui para receber a multiplicação por 1000 no loop de escala
 COLUNAS_BAL = ['ativo_total', 'ativo_circulante', 'passivo_circulante',
                'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida', 'passivo_total']
 
@@ -70,9 +70,6 @@ def obter_dados_empresas():
 
 
 def extrair_lucro_liquido(df):
-    """
-    Regra: usa 3.11 se existir, senão 3.09. Nunca soma os dois.
-    """
     df311 = df[df['CD_CONTA'].str.fullmatch(r'^3\.11$', na=False)].copy()
     df309 = df[df['CD_CONTA'].str.fullmatch(r'^3\.09$', na=False)].copy()
 
@@ -89,9 +86,8 @@ def extrair_lucro_liquido(df):
 
 def extrair_patrimonio_liquido(df):
     """
-    Bug 1 Corrigido: Aplica a cascata de prioridade POR EMPRESA (CD_CVM + DT_REFER),
-    não pelo arquivo inteiro. Usa a mesma lógica robusta de extrair_lucro_liquido.
-    Bug 3 Corrigido: Elimina regex de descrição, usando comparação direta de código de conta.
+    Bug 1 Corrigido: Aplica a cascata de prioridade POR EMPRESA (CD_CVM + DT_REFER).
+    Bug 3 Corrigido: Usa comparação direta de string, sem regex, evitando warnings e falhas de encoding.
     """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
@@ -133,9 +129,6 @@ def extrair_patrimonio_liquido(df):
 
 
 def extrair_depreciacao_amortizacao(df):
-    """
-    Regra: usa 6.01.01.04 se existir, senão 6.01.01.02, senão 6.01.01.05.
-    """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
@@ -257,7 +250,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 for conta, frame in frames.items():
                     resultado[conta] = frame
                 
-                # Extrair Patrimônio Líquido com a nova lógica por empresa
+                # Extrair Patrimônio Líquido com a lógica por empresa corrigida
                 pl = extrair_patrimonio_liquido(df)
                 if not pl.empty:
                     if 'patrimonio_liquido' not in resultado:
@@ -287,13 +280,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
-        # Fallback matemático: PL = Ativo Total - Passivo Total
-        # Agora seguro, pois passivo_total está em COLUNAS_BAL e receberá a escala correta
-        if 'patrimonio_liquido' not in df_final.columns or df_final['patrimonio_liquido'].isna().all():
-            if 'ativo_total' in df_final.columns and 'passivo_total' in df_final.columns:
-                print("    ⚠️ Aplicando fallback matemático: PL = Ativo Total - Passivo Total")
-                df_final['patrimonio_liquido'] = df_final['ativo_total'] - df_final['passivo_total']
-
+        # ==========================================================
+        # REORDENAÇÃO CRÍTICA SOLICITADA
+        # ==========================================================
+        
+        # 1. Cálculos derivados iniciais (ainda em milhares, matematicamente seguro)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
             df_final['lucro_bruto'] = df_final['receita_liquida'] + df_final['custo']
 
@@ -301,17 +292,28 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
             df_final['ebitda'] = df_final['ebit'] + da
 
-        # Converter MILHARES → REAIS (Agora inclui passivo_total)
+        # 2. Escala primeiro: Converte TODAS as colunas de DRE e BAL de MILHARES para REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
 
+        # Escala também a D&A explicitamente
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
+        # 3. Fallback DEPOIS da escala — ambos já em reais (garante integridade matemática)
+        if 'patrimonio_liquido' not in df_final.columns or df_final['patrimonio_liquido'].isna().all():
+            if 'ativo_total' in df_final.columns and 'passivo_total' in df_final.columns:
+                print("    ⚠️ Aplicando fallback: PL = Ativo Total - Passivo Total")
+                df_final['patrimonio_liquido'] = df_final['ativo_total'] - df_final['passivo_total']
+
+        # 4. Cálculo da Dívida Líquida (também após a escala, usando valores já em reais)
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
+        
+        # ==========================================================
 
+        # Mapear ticker
         df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
         df_final['ticker'] = df_final['CD_CVM_STR'].map(mapa_tickers)
         df_final['quantidade_acoes'] = df_final['CD_CVM_STR'].map(mapa_acoes)
