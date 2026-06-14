@@ -22,10 +22,11 @@ MAPEAMENTO_BPA = {
     'caixa':            r'^1\.01\.01\.01$',
 }
 
+# Mapeamento BPP ajustado (sem patrimonio_liquido, será extraído dinamicamente)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
     'divida_bruta':       r'^2\.02$',
-    'patrimonio_liquido': r'^2\.03$',
+    'passivo_total':      r'^2$',  # Adicionado para fallback
 }
 
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
@@ -114,6 +115,69 @@ def extrair_depreciacao_amortizacao(df):
     return agg.set_index(['CD_CVM', 'DT_REFER'])
 
 
+def extrair_patrimonio_liquido(df):
+    """
+    Extrai Patrimônio Líquido usando estratégia em cascata para diferentes tipos de empresas.
+    
+    PASSO 1: Conta 2.03 com descrição "Patrimônio Líquido Consolidado" (95% das empresas)
+    PASSO 2: Conta 2.08 com descrição "Patrimônio Líquido Consolidado" (ITAÚ)
+    PASSO 3: Conta 2.07 com descrição "Patrimônio Líquido Consolidado" (PINE, DAYCOVAL)
+    PASSO 4: Soma das contas 2.07.01 + 2.07.02 (SANTANDER, RCI, BANESTES)
+    PASSO 5: Retorna DataFrame vazio (fallback será aplicado depois)
+    """
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    df['DS_CONTA_STR'] = df['DS_CONTA'].astype(str).str.strip()
+    
+    # PASSO 1: Buscar 2.03 com descrição "Patrimônio Líquido Consolidado"
+    mask_203 = (
+        df['CD_CONTA_STR'].str.fullmatch(r'^2\.03$', na=False) &
+        df['DS_CONTA_STR'].str.contains('Patrimônio Líquido Consolidado', na=False, case=False)
+    )
+    df_203 = df[mask_203]
+    
+    if not df_203.empty:
+        agg = df_203.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
+        return agg.set_index(['CD_CVM', 'DT_REFER'])
+    
+    # PASSO 2: Buscar 2.08 com descrição "Patrimônio Líquido Consolidado"
+    mask_208 = (
+        df['CD_CONTA_STR'].str.fullmatch(r'^2\.08$', na=False) &
+        df['DS_CONTA_STR'].str.contains('Patrimônio Líquido Consolidado', na=False, case=False)
+    )
+    df_208 = df[mask_208]
+    
+    if not df_208.empty:
+        agg = df_208.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
+        return agg.set_index(['CD_CVM', 'DT_REFER'])
+    
+    # PASSO 3: Buscar 2.07 com descrição "Patrimônio Líquido Consolidado"
+    mask_207 = (
+        df['CD_CONTA_STR'].str.fullmatch(r'^2\.07$', na=False) &
+        df['DS_CONTA_STR'].str.contains('Patrimônio Líquido Consolidado', na=False, case=False)
+    )
+    df_207 = df[mask_207]
+    
+    if not df_207.empty:
+        agg = df_207.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
+        return agg.set_index(['CD_CVM', 'DT_REFER'])
+    
+    # PASSO 4: Buscar 2.07.01 + 2.07.02 e somar
+    mask_20701 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.07\.01$', na=False)
+    mask_20702 = df['CD_CONTA_STR'].str.fullmatch(r'^2\.07\.02$', na=False)
+    df_207_sub = df[mask_20701 | mask_20702]
+    
+    if not df_207_sub.empty:
+        agg = df_207_sub.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+        agg.columns = ['CD_CVM', 'DT_REFER', 'patrimonio_liquido']
+        return agg.set_index(['CD_CVM', 'DT_REFER'])
+    
+    # PASSO 5: Retorna DataFrame vazio (fallback será aplicado depois)
+    return pd.DataFrame()
+
+
 def processar_csv_dre(df_csv, mapeamento):
     frames = {}
     for conta, regex in mapeamento.items():
@@ -144,7 +208,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             dre_csv  = [n for n in csvs_con if '_DRE_' in n.upper()]
             bpa_csv  = [n for n in csvs_con if '_BPA_' in n.upper()]
             bpp_csv  = [n for n in csvs_con if '_BPP_' in n.upper()]
-            dfc_csv  = [n for n in csvs_con if '_DFC_MI_' in n.upper()]  # DFC Método Indireto
+            dfc_csv  = [n for n in csvs_con if '_DFC_MI_' in n.upper()]
 
             # 1. Processar DRE
             for nome in dre_csv:
@@ -192,9 +256,19 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     norm = df['ORDEM_EXERC'].astype(str).str.upper().str.strip()
                     norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     df = df[norm == 'ULTIMO']
+                
+                # Extrair contas padrão do BPP (passivo circulante, dívida bruta, passivo total)
                 frames = processar_csv_dre(df, MAPEAMENTO_BPP)
                 for conta, frame in frames.items():
                     resultado[conta] = frame
+                
+                # Extrair Patrimônio Líquido usando estratégia em cascata
+                pl = extrair_patrimonio_liquido(df)
+                if not pl.empty:
+                    if 'patrimonio_liquido' not in resultado:
+                        resultado['patrimonio_liquido'] = pl
+                    else:
+                        resultado['patrimonio_liquido'] = resultado['patrimonio_liquido'].combine_first(pl)
 
             # 4. Processar DFC_MI (Depreciação e Amortização)
             for nome in dfc_csv:
@@ -217,6 +291,12 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             return pd.DataFrame()
 
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
+
+        # Fallback matemático para Patrimônio Líquido (PASSO 5)
+        if 'patrimonio_liquido' not in df_final.columns or df_final['patrimonio_liquido'].isna().all():
+            if 'ativo_total' in df_final.columns and 'passivo_total' in df_final.columns:
+                print(f"    ⚠️  Aplicando fallback matemático: PL = Ativo - Passivo")
+                df_final['patrimonio_liquido'] = df_final['ativo_total'] - df_final['passivo_total']
 
         # Lucro bruto = receita + custo (custo já é negativo na fonte)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
@@ -270,7 +350,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             ['ticker', 'ano', 'trimestre', 'data_referencia']
             + [f'{c}_ytd' for c in COLUNAS_DRE if f'{c}_ytd' in df_final.columns]
             + [c for c in COLUNAS_BAL if c in df_final.columns]
-            + ['depreciacao_amortizacao']  # Inclui D&A na saída
+            + ['depreciacao_amortizacao']
             + ['quantidade_acoes']
         )
 
@@ -301,7 +381,6 @@ def calcular_colunas_q(df):
 
         grupo = df['ticker'].astype(str) + '_' + df['ano'].astype(str)
         df[col_q] = df.groupby(grupo)[col_ytd].diff()
-        # T1: diff é NaN → usa o próprio YTD
         df[col_q] = df[col_q].fillna(df[col_ytd])
 
     print(f"  {len(df)} registros processados.")
@@ -346,7 +425,6 @@ def main():
         
         df_final = df_dfp_all.copy()
         
-        # Adicionar apenas registros do ITR que NÃO existem no DFP
         df_itr_somente = df_itr_all.merge(
             df_dfp_all[['ticker', 'ano', 'trimestre']],
             on=['ticker', 'ano', 'trimestre'],
