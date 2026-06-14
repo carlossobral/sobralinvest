@@ -105,28 +105,58 @@ def extrair_patrimonio_liquido(df):
         return df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
                            .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
     
+    # PASSO 2: 2.08 com descrição de PL (Bancos def extrair_patrimonio_liquido(df):
+    """
+    Extrai PL com lógica robusta por empresa (CD_CVM), usando Regex à prova de acentos.
+    """
+    df = df.copy()
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    
+    # Regex robusta: (?i) ignora maiúsculas/minúsculas. [oóô] e [ií] pegam com ou sem acento.
+    regex_pl = r'(?i)patrim[oóô]nio\s+l[ií]quido'
+    is_pl_desc = df['DS_CONTA'].astype(str).str.contains(regex_pl, regex=True, na=False)
+    
+    resultados = []
+    
+    # PASSO 1: 2.03 com descrição de PL (Padrão para 95% das empresas)
+    mask_203 = (df['CD_CONTA_STR'] == '2.03') & is_pl_desc
+    if df[mask_203].shape[0] > 0:
+        res = df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+        res['prioridade'] = 1
+        resultados.append(res)
+    
     # PASSO 2: 2.08 com descrição de PL (Bancos grandes como ITUB4)
-    mask_208 = (df['CD_CONTA_STR'] == '2.08') & mask_pl_desc
+    mask_208 = (df['CD_CONTA_STR'] == '2.08') & is_pl_desc
     if df[mask_208].shape[0] > 0:
-        return df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+        res = df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+        res['prioridade'] = 2
+        resultados.append(res)
     
     # PASSO 3: 2.07 com descrição de PL (Bancos médios)
-    mask_207 = (df['CD_CONTA_STR'] == '2.07') & mask_pl_desc
+    mask_207 = (df['CD_CONTA_STR'] == '2.07') & is_pl_desc
     if df[mask_207].shape[0] > 0:
-        return df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+        res = df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+        res['prioridade'] = 3
+        resultados.append(res)
     
-    # PASSO 4: Soma de 2.07.01 e 2.07.02 (ex: Santander, RCI)
+    # PASSO 4: Soma de 2.07.01 e 2.07.02 (Estruturas específicas como Santander)
     mask_sub = df['CD_CONTA_STR'].isin(['2.07.01', '2.07.02'])
     if df[mask_sub].shape[0] > 0:
-        return df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
+        res = df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+        res['prioridade'] = 4
+        resultados.append(res)
     
-    return pd.DataFrame()
-
-
-def extrair_depreciacao_amortizacao(df):
+    if not resultados:
+        return pd.DataFrame()
+    
+    # Concatena todos os PLs encontrados e ordena por prioridade
+    df_pl = pd.concat(resultados, ignore_index=True)
+    df_pl = df_pl.sort_values(['CD_CVM', 'DT_REFER', 'prioridade'])
+    
+    # Mantém apenas a de maior prioridade (menor número) para cada empresa/data
+    df_pl = df_pl.drop_duplicates(subset=['CD_CVM', 'DT_REFER'], keep='first')
+    
+    return df_pl[['CD_CVM', 'DT_REFER', 'VL_CONTA']].rename(columns={'VL_CONTA': 'patrimonio_liquido'}).set_index(['CD_CVM', 'DT_REFER'])def extrair_depreciacao_amortizacao(df):
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
@@ -279,10 +309,10 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
         # ==========================================================
-        # ORDEM DE OPERAÇÕES CORRIGIDA (Escala antes de cálculos derivados)
+        # ORDEM DE OPERAÇÕES CORRIGIDA
         # ==========================================================
         
-        # 1. Cálculos derivados iniciais (ainda em milhares, matematicamente seguro)
+        # 1. Cálculos derivados iniciais (ainda em milhares)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
             df_final['lucro_bruto'] = df_final['receita_liquida'] + df_final['custo']
 
@@ -290,7 +320,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
             df_final['ebitda'] = df_final['ebit'] + da
 
-        # 2. Escala primeiro: Converte TODAS as colunas de DRE e BAL de MILHARES para REAIS
+        # 2. Escala: Converte TODAS as colunas de DRE e BAL de MILHARES para REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
 
@@ -298,11 +328,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
-        # 3. CORREÇÃO BUG 2: Fallback "PL = Ativo - Passivo" REMOVIDO.
-        # Na estrutura da CVM, a conta '1' (Ativo Total) e a conta '2' (Passivo Total) 
-        # representam os totais de cada lado do balanço, sendo iguais entre si.
-        # Subtrair um do outro resulta em 0, corrompendo o dado. A extração explícita 
-        # acima (Passos 1 a 4) é a única fonte da verdade para o PL.
+        # 3. FALLBACK REMOVIDO: Na CVM, a Conta 1 (Ativo Total) é igual à Conta 2 (Passivo Total, que já inclui o PL).
+        # Calcular Ativo - Passivo resulta matematicamente em 0, corrompendo o dado. 
+        # A extração explícita acima (Passos 1 a 4) é a única fonte da verdade.
 
         # 4. Cálculo da Dívida Líquida (após a escala, usando valores já em reais)
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
