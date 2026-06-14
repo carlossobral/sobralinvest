@@ -6,7 +6,7 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-ANO_INICIAL = 2024
+ANO_INICIAL = 2019
 ANO_FINAL = datetime.now().year
 
 # Contas validadas
@@ -22,7 +22,7 @@ MAPEAMENTO_BPA = {
     'caixa':            r'^1\.01\.01\.01$',
 }
 
-# Mapeamento BPP ajustado (passivo_total adicionado para garantir escala correta e fallback)
+# Mapeamento BPP ajustado (passivo_total mantido para auditoria, mas não usado para cálculo de PL)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
     'divida_bruta':       r'^2\.02$',
@@ -30,7 +30,6 @@ MAPEAMENTO_BPP = {
 }
 
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
-# passivo_total adicionado aqui para receber a multiplicação por 1000 no loop de escala
 COLUNAS_BAL = ['ativo_total', 'ativo_circulante', 'passivo_circulante',
                'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida', 'passivo_total']
 
@@ -86,46 +85,45 @@ def extrair_lucro_liquido(df):
 
 def extrair_patrimonio_liquido(df):
     """
-    Bug 1 Corrigido: Aplica a cascata de prioridade POR EMPRESA (CD_CVM + DT_REFER).
-    Bug 3 Corrigido: Usa comparação direta de string, sem regex, evitando warnings e falhas de encoding.
+    CORREÇÃO BUG 1: Extrai PL verificando código E descrição da conta em cascata.
+    Normaliza o texto para ignorar acentos e maiúsculas/minúsculas, evitando 
+    capturar contas erradas (ex: 2.03 do ITUB4 que é 'Passivos Financeiros').
     """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
-    # 1. Tenta 2.03 (Padrão para 95% das empresas)
-    df_203 = df[df['CD_CONTA_STR'] == '2.03'].copy()
-    agg_203 = df_203.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-    agg_203.columns = ['CD_CVM', 'DT_REFER', 'pl_203']
+    # Normaliza a descrição: minúsculas e sem acentos (ex: "patrimonio liquido consolidado")
+    df['DS_NORM'] = (df['DS_CONTA'].astype(str).str.strip().str.lower()
+                     .str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8'))
     
-    # 2. Tenta 2.08 (Bancos grandes como ITUB4)
-    df_208 = df[df['CD_CONTA_STR'] == '2.08'].copy()
-    agg_208 = df_208.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-    agg_208.columns = ['CD_CVM', 'DT_REFER', 'pl_208']
+    # Padrão de busca robusto: "patrimonio liquido"
+    mask_pl_desc = df['DS_NORM'].str.contains('patrimonio liquido', na=False)
     
-    # 3. Tenta 2.07 (Bancos médios)
-    df_207 = df[df['CD_CONTA_STR'] == '2.07'].copy()
-    agg_207 = df_207.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-    agg_207.columns = ['CD_CVM', 'DT_REFER', 'pl_207']
+    # PASSO 1: 2.03 com descrição de PL (Padrão para 95% das empresas)
+    mask_203 = (df['CD_CONTA_STR'] == '2.03') & mask_pl_desc
+    if df[mask_203].shape[0] > 0:
+        return df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
     
-    # 4. Tenta 2.07.01 + 2.07.02 (Soma para bancos específicos como Santander)
-    df_sub = df[df['CD_CONTA_STR'].isin(['2.07.01', '2.07.02'])].copy()
-    agg_sub = df_sub.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-    agg_sub.columns = ['CD_CVM', 'DT_REFER', 'pl_sub']
+    # PASSO 2: 2.08 com descrição de PL (Bancos grandes como ITUB4)
+    mask_208 = (df['CD_CONTA_STR'] == '2.08') & mask_pl_desc
+    if df[mask_208].shape[0] > 0:
+        return df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
     
-    # Merge em cascata (outer join para preservar todas as empresas)
-    merged = agg_203.merge(agg_208, on=['CD_CVM', 'DT_REFER'], how='outer')
-    merged = merged.merge(agg_207, on=['CD_CVM', 'DT_REFER'], how='outer')
-    merged = merged.merge(agg_sub, on=['CD_CVM', 'DT_REFER'], how='outer')
+    # PASSO 3: 2.07 com descrição de PL (Bancos médios)
+    mask_207 = (df['CD_CONTA_STR'] == '2.07') & mask_pl_desc
+    if df[mask_207].shape[0] > 0:
+        return df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
     
-    # Prioriza: 2.03 > 2.08 > 2.07 > pl_sub
-    merged['patrimonio_liquido'] = (
-        merged['pl_203']
-        .combine_first(merged['pl_208'])
-        .combine_first(merged['pl_207'])
-        .combine_first(merged['pl_sub'])
-    )
+    # PASSO 4: Soma de 2.07.01 e 2.07.02 (ex: Santander, RCI)
+    mask_sub = df['CD_CONTA_STR'].isin(['2.07.01', '2.07.02'])
+    if df[mask_sub].shape[0] > 0:
+        return df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()\
+                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
     
-    return merged[['CD_CVM', 'DT_REFER', 'patrimonio_liquido']].set_index(['CD_CVM', 'DT_REFER'])
+    return pd.DataFrame()
 
 
 def extrair_depreciacao_amortizacao(df):
@@ -250,7 +248,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 for conta, frame in frames.items():
                     resultado[conta] = frame
                 
-                # Extrair Patrimônio Líquido com a lógica por empresa corrigida
+                # Extrair Patrimônio Líquido com a lógica robusta de descrição + código
                 pl = extrair_patrimonio_liquido(df)
                 if not pl.empty:
                     if 'patrimonio_liquido' not in resultado:
@@ -281,7 +279,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
         # ==========================================================
-        # REORDENAÇÃO CRÍTICA SOLICITADA
+        # ORDEM DE OPERAÇÕES CORRIGIDA (Escala antes de cálculos derivados)
         # ==========================================================
         
         # 1. Cálculos derivados iniciais (ainda em milhares, matematicamente seguro)
@@ -300,13 +298,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
-        # 3. Fallback DEPOIS da escala — ambos já em reais (garante integridade matemática)
-        if 'patrimonio_liquido' not in df_final.columns or df_final['patrimonio_liquido'].isna().all():
-            if 'ativo_total' in df_final.columns and 'passivo_total' in df_final.columns:
-                print("    ⚠️ Aplicando fallback: PL = Ativo Total - Passivo Total")
-                df_final['patrimonio_liquido'] = df_final['ativo_total'] - df_final['passivo_total']
+        # 3. CORREÇÃO BUG 2: Fallback "PL = Ativo - Passivo" REMOVIDO.
+        # Na estrutura da CVM, a conta '1' (Ativo Total) e a conta '2' (Passivo Total) 
+        # representam os totais de cada lado do balanço, sendo iguais entre si.
+        # Subtrair um do outro resulta em 0, corrompendo o dado. A extração explícita 
+        # acima (Passos 1 a 4) é a única fonte da verdade para o PL.
 
-        # 4. Cálculo da Dívida Líquida (também após a escala, usando valores já em reais)
+        # 4. Cálculo da Dívida Líquida (após a escala, usando valores já em reais)
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
