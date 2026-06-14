@@ -85,61 +85,42 @@ def extrair_lucro_liquido(df):
 
 def extrair_patrimonio_liquido(df):
     """
-    CORREÇÃO BUG 1: Extrai PL verificando código E descrição da conta em cascata.
-    Normaliza o texto para ignorar acentos e maiúsculas/minúsculas, evitando 
-    capturar contas erradas (ex: 2.03 do ITUB4 que é 'Passivos Financeiros').
+    Extrai PL com lógica simplificada:
+    - 2.03: verifica descrição (empresas normais)
+    - 2.08, 2.07, 2.07.01+2.07.02: NÃO verifica descrição (sempre PL em bancos)
     """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-    
-    # Normaliza a descrição: minúsculas e sem acentos (ex: "patrimonio liquido consolidado")
-    df['DS_NORM'] = (df['DS_CONTA'].astype(str).str.strip().str.lower()
-                     .str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8'))
-    
-    # Padrão de busca robusto: "patrimonio liquido"
-    mask_pl_desc = df['DS_NORM'].str.contains('patrimonio liquido', na=False)
-    
-    # PASSO 1: 2.03 com descrição de PL (Padrão para 95% das empresas)
-    mask_203 = (df['CD_CONTA_STR'] == '2.03') & mask_pl_desc
-    if df[mask_203].shape[0] > 0:
-        return df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()\
-                           .set_index(['CD_CVM', 'DT_REFER']).rename(columns={'VL_CONTA': 'patrimonio_liquido'})
-    
-    # PASSO 2: 2.08 com descrição de PL (Bancos def extrair_patrimonio_liquido(df):
-    """
-    Extrai PL com lógica robusta por empresa (CD_CVM), usando Regex à prova de acentos.
-    """
-    df = df.copy()
-    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-    
-    # Regex robusta: (?i) ignora maiúsculas/minúsculas. [oóô] e [ií] pegam com ou sem acento.
-    regex_pl = r'(?i)patrim[oóô]nio\s+l[ií]quido'
-    is_pl_desc = df['DS_CONTA'].astype(str).str.contains(regex_pl, regex=True, na=False)
     
     resultados = []
     
-    # PASSO 1: 2.03 com descrição de PL (Padrão para 95% das empresas)
-    mask_203 = (df['CD_CONTA_STR'] == '2.03') & is_pl_desc
+    # PASSO 1: 2.03 COM verificação de descrição (empresas normais)
+    # Busca por "patrimonio" ou "patrimônio" (com ou sem acento)
+    mask_pl_desc = (
+        df['DS_CONTA'].astype(str).str.contains('patrimonio', case=False, na=False) |
+        df['DS_CONTA'].astype(str).str.contains('patrimônio', case=False, na=False)
+    )
+    mask_203 = (df['CD_CONTA_STR'] == '2.03') & mask_pl_desc
     if df[mask_203].shape[0] > 0:
         res = df[mask_203].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
         res['prioridade'] = 1
         resultados.append(res)
     
-    # PASSO 2: 2.08 com descrição de PL (Bancos grandes como ITUB4)
-    mask_208 = (df['CD_CONTA_STR'] == '2.08') & is_pl_desc
+    # PASSO 2: 2.08 SEM verificação de descrição (bancos grandes como ITUB4)
+    mask_208 = df['CD_CONTA_STR'] == '2.08'
     if df[mask_208].shape[0] > 0:
         res = df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
         res['prioridade'] = 2
         resultados.append(res)
     
-    # PASSO 3: 2.07 com descrição de PL (Bancos médios)
-    mask_207 = (df['CD_CONTA_STR'] == '2.07') & is_pl_desc
+    # PASSO 3: 2.07 SEM verificação de descrição (bancos médios)
+    mask_207 = df['CD_CONTA_STR'] == '2.07'
     if df[mask_207].shape[0] > 0:
         res = df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
         res['prioridade'] = 3
         resultados.append(res)
     
-    # PASSO 4: Soma de 2.07.01 e 2.07.02 (Estruturas específicas como Santander)
+    # PASSO 4: 2.07.01 + 2.07.02 SEM verificação de descrição (soma)
     mask_sub = df['CD_CONTA_STR'].isin(['2.07.01', '2.07.02'])
     if df[mask_sub].shape[0] > 0:
         res = df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
@@ -149,15 +130,14 @@ def extrair_patrimonio_liquido(df):
     if not resultados:
         return pd.DataFrame()
     
-    # Concatena todos os PLs encontrados e ordena por prioridade
+    # Concatena e ordena por prioridade
     df_pl = pd.concat(resultados, ignore_index=True)
     df_pl = df_pl.sort_values(['CD_CVM', 'DT_REFER', 'prioridade'])
     
-    # Mantém apenas a de maior prioridade (menor número) para cada empresa/data
+    # Mantém apenas a de maior prioridade (menor número)
     df_pl = df_pl.drop_duplicates(subset=['CD_CVM', 'DT_REFER'], keep='first')
     
     return df_pl[['CD_CVM', 'DT_REFER', 'VL_CONTA']].rename(columns={'VL_CONTA': 'patrimonio_liquido'}).set_index(['CD_CVM', 'DT_REFER'])
-
 
 def extrair_depreciacao_amortizacao(df):
     df = df.copy()
