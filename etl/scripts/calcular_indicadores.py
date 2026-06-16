@@ -311,7 +311,7 @@ def sd(a, b):
         return None
 
 
-def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
+def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     if df_cot.empty:
         print("Sem cotacoes. Abortando.")
         return
@@ -354,12 +354,66 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         "ebit_ltm": "ebit",
     })
 
+    # ============================================================
+    # MUDANÇA CRÍTICA: Calcular quantidade total de ações por CD_CVM
+    # ============================================================
+    print("Calculando quantidade total de ações por CD_CVM...")
+    
+    # Buscar todos os tickers e suas quantidades de ações da tabela empresas
+    empresas_data = []
+    offset = 0
+    while True:
+        chunk = (
+            supabase.table("empresas")
+            .select("ticker, cd_cvm, quantidade_acoes")
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        empresas_data.extend(chunk)
+        if len(chunk) < 1000:
+            break
+        offset += 1000
+    
+    df_empresas = pd.DataFrame(empresas_data)
+    df_empresas["quantidade_acoes"] = pd.to_numeric(df_empresas["quantidade_acoes"], errors="coerce")
+    
+    # Agrupar por CD_CVM e somar as quantidades de ações
+    acoes_por_cdcvm = (
+        df_empresas.groupby("cd_cvm")["quantidade_acoes"]
+        .sum()
+        .reset_index()
+        .rename(columns={"quantidade_acoes": "quantidade_acoes_consolidada"})
+    )
+    
+    # Criar mapa ticker -> quantidade_acoes_consolidada
+    ticker_para_cdcvm = df_empresas[["ticker", "cd_cvm"]].drop_duplicates()
+    ticker_para_acoes_consolidada = ticker_para_cdcvm.merge(
+        acoes_por_cdcvm, on="cd_cvm", how="left"
+    )
+    
+    # Converter para dicionário para acesso rápido
+    mapa_acoes_consolidadas = dict(
+        zip(ticker_para_acoes_consolidada["ticker"], 
+            ticker_para_acoes_consolidada["quantidade_acoes_consolidada"])
+    )
+    
+    print(f"  Total de ações consolidadas calculado para {len(mapa_acoes_consolidadas)} tickers.")
+    # ============================================================
+
     registros_saida = []
 
     for _, row in df.iterrows():
         t = row.get
         p = safe_float(t("preco_atual"))
-        qty = safe_float(t("quantidade_acoes"))
+        
+        # USAR QUANTIDADE CONSOLIDADA DO CD_CVM PARA LPA E VPA
+        ticker_atual = row["ticker"]
+        qty_consolidada = safe_float(mapa_acoes_consolidadas.get(ticker_atual))
+        
+        # Manter quantidade individual para Market Cap e outros cálculos
+        qty_individual = safe_float(t("quantidade_acoes"))
+        
         pl = safe_float(t("patrimonio_liquido"))
         at = safe_float(t("ativo_total"))
         ac = safe_float(t("ativo_circulante"))
@@ -373,10 +427,15 @@ def calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         div12m = safe_float(t("dividendos_12m")) or 0.0
         div6a = safe_float(t("dividendos_6a_media")) or 0.0
 
-        mc = (p * qty) if (p and qty) else None
+        # Market Cap usa quantidade individual do ticker
+        mc = (p * qty_individual) if (p and qty_individual) else None
+        
         ev = (mc + div_liq) if mc is not None else None
-        lpa = sd(ll, qty)
-        vpa = sd(pl, qty)
+        
+        # LPA e VPA usam quantidade consolidada do CD_CVM (VALORES EXATOS, SEM ARREDONDAMENTO)
+        lpa = sd(ll, qty_consolidada)
+        vpa = sd(pl, qty_consolidada)
+        
         cap_giro = (ac - pc) if (ac is not None and pc is not None) else None
         cap_inv = (pl + div_liq) if pl is not None else None
 
@@ -492,7 +551,7 @@ def main():
     df_div_12m, df_div_6a = calcular_dividendos(df_div)
     df_cagr = calcular_cagr(df_fund)
 
-    calcular_e_salvar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr)
+    calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr)
 
     print("\n========== FINAL ==========")
     print("Indicadores calculados com sucesso.")
