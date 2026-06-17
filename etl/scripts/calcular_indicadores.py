@@ -90,6 +90,23 @@ def buscar_fundamentos() -> pd.DataFrame:
             v = mais_recente.get(col)
             return safe_float(v)
 
+        # ============================================================
+        # CORREÇÃO PSR: Buscar receita do último T4 disponível
+        # ============================================================
+        # Filtrar apenas registros do T4
+        t4_records = grp[grp['trimestre'] == 4]
+        
+        if not t4_records.empty:
+            # Pegar o ano mais recente com T4 disponível
+            ultimo_ano_t4 = t4_records['ano'].max()
+            # Buscar o registro desse ano e trimestre
+            receita_anual_record = t4_records[t4_records['ano'] == ultimo_ano_t4].iloc[0]
+            receita_anual = safe_float(receita_anual_record.get('receita_liquida_ytd'))
+        else:
+            # Fallback: se não houver T4, usar None
+            receita_anual = None
+        # ============================================================
+
         row = {
             "ticker": ticker,
             "ano": int(mais_recente["ano"]) if pd.notna(mais_recente["ano"]) else None,
@@ -109,6 +126,7 @@ def buscar_fundamentos() -> pd.DataFrame:
             "divida_bruta": bal("divida_bruta"),
             "divida_liquida": bal("divida_liquida"),
             "quantidade_acoes": bal("quantidade_acoes"),
+            "receita_anual_t4": receita_anual,  # Nova coluna para o PSR
         }
         resultados.append(row)
 
@@ -426,9 +444,15 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         lb = safe_float(t("lucro_bruto_ltm"))
         div12m = safe_float(t("dividendos_12m")) or 0.0
         div6a = safe_float(t("dividendos_6a_media")) or 0.0
+        
+        # CORREÇÃO PSR: Buscar receita anual do último T4
+        receita_anual_t4 = safe_float(t("receita_anual_t4"))
 
         # Market Cap usa quantidade individual do ticker
         mc = (p * qty_individual) if (p and qty_individual) else None
+        
+        # Market Cap consolidado para PSR
+        mc_consolidado = (p * qty_consolidada) if (p and qty_consolidada) else None
         
         ev = (mc + div_liq) if mc is not None else None
         
@@ -448,7 +472,8 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "dy_atual": sd(div12m, p),
             "p_l": sd(p, lpa),
             "p_vp": sd(p, vpa),
-            "p_receita": sd(mc, safe_float(t("receita_liquida"))),
+            # CORREÇÃO PSR: Usar Market Cap consolidado e receita anual do T4
+            "p_receita": sd(mc_consolidado, receita_anual_t4),
             "p_ativo": sd(mc, at),
             "p_cap_giro": sd(mc, cap_giro),
             "p_ativo_circ_liq": sd(mc, cap_giro),
