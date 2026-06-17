@@ -446,7 +446,7 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "data_balanco": row["data_balanco"],
             "preco_atual": p,
             "dy_atual": sd(div12m, p),
-            "p_l": sd(mc, ll),
+            "p_l": sd(p, lpa),
             "p_vp": sd(p, vpa),
             "p_receita": sd(mc, safe_float(t("receita_liquida"))),
             "p_ativo": sd(mc, at),
