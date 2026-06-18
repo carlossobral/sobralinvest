@@ -1,92 +1,130 @@
 """
-ETL CVM via Playwright - VERSÃO FUNCIONAL
+ETL CVM via XBRL - Download e Parsing de Demonstrações Financeiras
 """
 
-import time
+import requests
+import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 import re
 from datetime import datetime
 
-import pandas as pd
-from playwright.sync_api import sync_playwright
 
-def extrair_demonstracao_cvm(page, url_enet: str, nome_demonstracao: str) -> pd.DataFrame | None:
+def obter_link_xbrl(url_enet: str) -> str | None:
     """
-    Acessa uma demonstração específica no ENET e extrai a tabela
+    A partir da URL do ENET, obtém o link para download do XBRL
     """
-    print(f"    📊 Acessando: {nome_demonstracao}")
+    print(f"🔗 Acessando ENET: {url_enet}")
     
     try:
-        # Acessar a página principal do ENET
-        page.goto(url_enet, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(5000)
+        # Fazer request para a página do ENET
+        response = requests.get(url_enet, timeout=30)
+        response.raise_for_status()
         
-        # Tentar encontrar o link no menu
-        # O menu tem links com os nomes exatos das demonstrações
-        link = page.locator(f'a:has-text("{nome_demonstracao}")').first
-        link.wait_for(state="visible", timeout=10000)
-        link.click()
+        # Parsear HTML para encontrar link de download
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Aguardar o conteúdo carregar
-        page.wait_for_timeout(5000)
+        # Procurar por botão/link de download XBRL
+        # Geralmente tem um botão "Download" ou "XBRL"
+        links = soup.find_all('a', href=True)
         
-        # Extrair a tabela
-        tabela = page.locator('table').first
-        tabela.wait_for(state="visible", timeout=10000)
+        for link in links:
+            href = link['href']
+            if 'XBRL' in href.upper() or 'DownloadDocumento' in href:
+                print(f"✅ Link XBRL encontrado: {href}")
+                return href
         
-        html_tabela = tabela.inner_html()
-        df = pd.read_html(f'<table>{html_tabela}</table>')[0]
-        
-        print(f"    ✅ {len(df)} linhas extraídas")
-        return df
+        print("❌ Link XBRL não encontrado")
+        return None
         
     except Exception as e:
-        print(f"    ❌ Erro ao extrair {nome_demonstracao}: {e}")
+        print(f"❌ Erro ao acessar ENET: {e}")
         return None
 
 
-def converter_valor(valor) -> float | None:
-    if pd.isna(valor):
-        return None
-    s = str(valor).strip()
-    if s in ("", "-", "—"):
-        return None
-    s = re.sub(r"\s", "", s)
-    s = s.replace(".", "").replace(",", ".")
+def baixar_xbrl(url_xbrl: str, output_file: str = "demonstracao.xml") -> bool:
+    """
+    Baixa o arquivo XBRL da CVM
+    """
+    print(f"\n📥 Baixando XBRL...")
+    
     try:
-        return float(s)
-    except ValueError:
+        response = requests.get(url_xbrl, timeout=60)
+        response.raise_for_status()
+        
+        with open(output_file, 'wb') as f:
+            f.write(response.content)
+        
+        print(f"✅ Arquivo salvo: {output_file}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Erro ao baixar XBRL: {e}")
+        return False
+
+
+def parsear_xbrl(xml_file: str) -> dict:
+    """
+    Faz parsing do arquivo XBRL e extrai dados financeiros
+    """
+    print(f"\n🔍 Parseando XBRL...")
+    
+    try:
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+        
+        # Remover namespaces para facilitar busca
+        for elem in root.getiterator():
+            if not hasattr(elem.tag, 'find'):
+                continue
+            i = elem.tag.find('}')
+            if i >= 0:
+                elem.tag = elem.tag[i+1:]
+        
+        dados = {
+            'balanco_ativo': {},
+            'balanco_passivo': {},
+            'dre': {},
+            'dfc': {}
+        }
+        
+        # Procurar por elementos de demonstrações financeiras
+        # XBRL usa tags específicas para cada conta contábil
+        
+        # Balanço Patrimonial
+        for elem in root.iter():
+            tag = elem.tag.lower()
+            text = elem.text.strip() if elem.text else None
+            
+            if not text:
+                continue
+            
+            # Converter valor brasileiro para float
+            try:
+                valor = float(text.replace('.', '').replace(',', '.'))
+            except:
+                continue
+            
+            # Identificar conta pelo nome ou contexto
+            if 'ativo' in tag and 'total' in tag:
+                dados['balanco_ativo']['1'] = valor
+            elif 'passivo' in tag and 'total' in tag:
+                dados['balanco_passivo']['2'] = valor
+            elif 'receita' in tag and 'liquida' in tag:
+                dados['dre']['3.01'] = valor
+            elif 'lucro' in tag and 'liquido' in tag:
+                dados['dre']['3.11'] = valor
+        
+        print(f"✅ Parsing concluído")
+        print(f"   - Balanço Ativo: {len(dados['balanco_ativo'])} contas")
+        print(f"   - Balanço Passivo: {len(dados['balanco_passivo'])} contas")
+        print(f"   - DRE: {len(dados['dre'])} contas")
+        print(f"   - DFC: {len(dados['dfc'])} contas")
+        
+        return dados
+        
+    except Exception as e:
+        print(f"❌ Erro ao parsear XBRL: {e}")
         return None
-
-
-def parsear_df(df: pd.DataFrame) -> dict:
-    """
-    Recebe um DataFrame e retorna dicionário {codigo_conta: valor}
-    """
-    if df is None or df.empty:
-        return {}
-
-    resultado = {}
-    df.columns = [str(c).strip() for c in df.columns]
-
-    col_conta = df.columns[0]
-
-    col_valor = None
-    for c in df.columns[1:]:
-        vals = df[c].apply(converter_valor).dropna()
-        if len(vals) > 3:
-            col_valor = c
-            break
-
-    if col_valor is None:
-        return {}
-
-    for _, row in df.iterrows():
-        conta = str(row[col_conta]).strip()
-        valor = converter_valor(row[col_valor])
-        if conta and valor is not None:
-            resultado[conta] = valor
-
-    return resultado
 
 
 def formatar_valor_br(valor) -> str:
@@ -96,72 +134,80 @@ def formatar_valor_br(valor) -> str:
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def exibir_resultados(dados: dict):
+    """
+    Exibe os dados extraídos de forma formatada
+    """
+    print("\n" + "=" * 80)
+    print("📊 DADOS EXTRAÍDOS DO XBRL")
+    print("=" * 80)
+    
+    # BALANÇO PATRIMONIAL ATIVO
+    print("\n💼 BALANÇO PATRIMONIAL - ATIVO")
+    print("-" * 80)
+    bpa = dados.get('balanco_ativo', {})
+    if bpa:
+        for conta, valor in sorted(bpa.items()):
+            print(f"  {conta:15s} {formatar_valor_br(valor):>25s}")
+    else:
+        print("  ⚠️  Dados não extraídos")
+    
+    # BALANÇO PATRIMONIAL PASSIVO
+    print("\n💼 BALANÇO PATRIMONIAL - PASSIVO")
+    print("-" * 80)
+    bpp = dados.get('balanco_passivo', {})
+    if bpp:
+        for conta, valor in sorted(bpp.items()):
+            print(f"  {conta:15s} {formatar_valor_br(valor):>25s}")
+    else:
+        print("  ⚠️  Dados não extraídos")
+    
+    # DRE
+    print("\n📈 DEMONSTRAÇÃO DO RESULTADO")
+    print("-" * 80)
+    dre = dados.get('dre', {})
+    if dre:
+        for conta, valor in sorted(dre.items()):
+            print(f"  {conta:15s} {formatar_valor_br(valor):>25s}")
+    else:
+        print("  ⚠️  Dados não extraídos")
+    
+    print("\n" + "=" * 80)
+
+
 def main():
     print("=" * 80)
-    print("🔍 ETL CVM - EXTRAÇÃO DIRETA DO ENET")
+    print("🔍 ETL CVM via XBRL - Download e Parsing")
     print("=" * 80)
     
+    # URL do ENET (PETR4 - 1T2026)
     url_enet = "https://www.rad.cvm.gov.br/ENET/frmGerenciaPaginaFRE.aspx?NumeroSequencialDocumento=157120&CodigoTipoInstituicao=1"
-    ticker = "PETR4"
-    data_ref = "2026-03-31"
     
-    print(f"\n📋 Ticker: {ticker}")
-    print(f"📅 Data: {data_ref}")
-    print(f"🔗 URL: {url_enet}\n")
+    print(f"\n📋 URL ENET: {url_enet}\n")
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=500)
-        page = browser.new_page()
-        
-        try:
-            # Extrair cada demonstração
-            bpa = extrair_demonstracao_cvm(page, url_enet, "Balanço Patrimonial Ativo")
-            time.sleep(2)
-            
-            bpp = extrair_demonstracao_cvm(page, url_enet, "Balanço Patrimonial Passivo")
-            time.sleep(2)
-            
-            dre = extrair_demonstracao_cvm(page, url_enet, "Demonstração do Resultado")
-            time.sleep(2)
-            
-            dfc = extrair_demonstracao_cvm(page, url_enet, "Demonstração do Fluxo de Caixa")
-            
-            # Exibir resultados
-            print("\n" + "=" * 80)
-            print("📊 DADOS EXTRAÍDOS")
-            print("=" * 80)
-            
-            bpa_dict = parsear_df(bpa)
-            bpp_dict = parsear_df(bpp)
-            dre_dict = parsear_df(dre)
-            
-            print("\n💼 BALANÇO PATRIMONIAL - ATIVO")
-            print("-" * 80)
-            for conta in ["1", "1.01", "1.01.01", "1.01.02"]:
-                if conta in bpa_dict:
-                    print(f"  {conta:15s} {formatar_valor_br(bpa_dict[conta]):>25s}")
-            
-            print("\n💼 BALANÇO PATRIMONIAL - PASSIVO")
-            print("-" * 80)
-            for conta in ["2", "2.01", "2.02", "2.03"]:
-                if conta in bpp_dict:
-                    print(f"  {conta:15s} {formatar_valor_br(bpp_dict[conta]):>25s}")
-            
-            print("\n📈 DEMONSTRAÇÃO DO RESULTADO")
-            print("-" * 80)
-            for conta in ["3.01", "3.02", "3.03", "3.05", "3.11"]:
-                if conta in dre_dict:
-                    print(f"  {conta:15s} {formatar_valor_br(dre_dict[conta]):>25s}")
-            
-            print("\n" + "=" * 80)
-            print("✅ EXTRAÇÃO CONCLUÍDA!")
-            print("=" * 80)
-            
-        except Exception as e:
-            print(f"\n❌ Erro geral: {e}")
-        
-        finally:
-            browser.close()
+    # 1. Obter link do XBRL
+    url_xbrl = obter_link_xbrl(url_enet)
+    
+    if not url_xbrl:
+        print("\n❌ Não foi possível obter o link do XBRL")
+        return
+    
+    # 2. Baixar arquivo XBRL
+    if not baixar_xbrl(url_xbrl, "petr4_1t2026.xml"):
+        print("\n❌ Não foi possível baixar o XBRL")
+        return
+    
+    # 3. Parsear XBRL
+    dados = parsear_xbrl("petr4_1t2026.xml")
+    
+    if not dados:
+        print("\n❌ Não foi possível parsear o XBRL")
+        return
+    
+    # 4. Exibir resultados
+    exibir_resultados(dados)
+    
+    print("\n✅ Processo concluído com sucesso!")
 
 
 if __name__ == "__main__":
