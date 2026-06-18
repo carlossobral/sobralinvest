@@ -19,7 +19,7 @@ MAPEAMENTO_DRE = {
 MAPEAMENTO_BPA = {
     'ativo_total':      r'^1$',
     'ativo_circulante': r'^1\.01$',
-    'caixa':            r'^1\.01\.01\.01$',
+    'caixa':            r'^1\.01\.01$',
 }
 
 # Mapeamento BPP ajustado (passivo_total mantido para auditoria, mas não usado para cálculo de PL)
