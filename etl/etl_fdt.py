@@ -1,6 +1,6 @@
 """
 ETL CVM via Playwright - MODO PREVIEW (sem Supabase)
-Versão corrigida para estrutura real do Fundamentus
+Versão CORRIGIDA com base na estrutura real do Fundamentus
 """
 
 import time
@@ -29,10 +29,7 @@ def obter_dados_fundamentus(page, ticker: str):
     Acessa a página de resultados trimestrais do Fundamentus e retorna
     a data mais recente e o link para o ENET da CVM.
     
-    Estrutura da tabela:
-    Coluna 0: Data Referência (ex: "31/03/2026")
-    Coluna 1: Demonstração Financeira (link "Exibir")
-    Coluna 2: Release de Resultados (link "Download")
+    CORREÇÃO: A tabela usa class="resultado", NÃO id="resultado"
     """
     url = f"https://www.fundamentus.com.br/resultados_trimestrais.php?papel={ticker}"
     print(f"  🌐 Fundamentus: {url}")
@@ -41,15 +38,15 @@ def obter_dados_fundamentus(page, ticker: str):
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
 
-        # A tabela tem id="resultado" no Fundamentus
-        tabela = page.locator("table#resultado tbody tr").first
+        # CORREÇÃO: Usar class="resultado" em vez de id="resultado"
+        tabela = page.locator("table.resultado tbody tr").first
 
         # Coluna 0: Data Referência
         data_texto = tabela.locator("td").nth(0).inner_text().strip()
         
-        # Coluna 1: Demonstração Financeira - procurar link com texto "Exibir"
+        # Coluna 1: Demonstração Financeira - link "Exibir"
         coluna_demonstracao = tabela.locator("td").nth(1)
-        link_elem = coluna_demonstracao.locator("a:has-text('Exibir')").first
+        link_elem = coluna_demonstracao.locator("a").first
         link_href = link_elem.get_attribute("href")
 
         # Converter data "31/03/2026" → "2026-03-31"
@@ -307,7 +304,7 @@ def main():
     print("=" * 80)
 
     # Lista de tickers para testar
-    tickers = ["PETR4", "VALE3", "WEGE3"]
+    tickers = ["PETR4"]  # Começar com apenas 1 para teste
     
     print(f"\n📋 Tickers para processar: {', '.join(tickers)}\n")
 
