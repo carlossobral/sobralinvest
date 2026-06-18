@@ -1,18 +1,6 @@
 """
 ETL CVM via Playwright - MODO PREVIEW (sem Supabase)
-Fluxo:
-  1. Acessa Fundamentus para tickers específicos
-  2. Acessa o link do ENET (CVM)
-  3. Extrai BP, DRE e DFC
-  4. Apenas exibe os dados (NÃO insere no banco)
-
-Instalar dependências com uv:
-  uv init
-  uv add playwright pandas python-dotenv
-  uv run playwright install chromium
-
-Executar:
-  uv run python etl_preview.py
+Versão corrigida para estrutura real do Fundamentus
 """
 
 import time
@@ -22,7 +10,6 @@ from datetime import datetime
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-# Mapeamento dos textos do menu ENET
 SECOES_ENET = {
     "balanco_ativo":   ["Balanço Patrimonial Ativo",   "Balanco Patrimonial Ativo"],
     "balanco_passivo": ["Balanço Patrimonial Passivo",  "Balanco Patrimonial Passivo"],
@@ -41,6 +28,11 @@ def obter_dados_fundamentus(page, ticker: str):
     """
     Acessa a página de resultados trimestrais do Fundamentus e retorna
     a data mais recente e o link para o ENET da CVM.
+    
+    Estrutura da tabela:
+    Coluna 0: Data Referência (ex: "31/03/2026")
+    Coluna 1: Demonstração Financeira (link "Exibir")
+    Coluna 2: Release de Resultados (link "Download")
     """
     url = f"https://www.fundamentus.com.br/resultados_trimestrais.php?papel={ticker}"
     print(f"  🌐 Fundamentus: {url}")
@@ -52,10 +44,13 @@ def obter_dados_fundamentus(page, ticker: str):
         # A tabela tem id="resultado" no Fundamentus
         tabela = page.locator("table#resultado tbody tr").first
 
-        # Primeira coluna = data | segunda coluna = link demonstração
+        # Coluna 0: Data Referência
         data_texto = tabela.locator("td").nth(0).inner_text().strip()
-        link_elem  = tabela.locator("td a").first
-        link_href  = link_elem.get_attribute("href")
+        
+        # Coluna 1: Demonstração Financeira - procurar link com texto "Exibir"
+        coluna_demonstracao = tabela.locator("td").nth(1)
+        link_elem = coluna_demonstracao.locator("a:has-text('Exibir')").first
+        link_href = link_elem.get_attribute("href")
 
         # Converter data "31/03/2026" → "2026-03-31"
         data_iso = datetime.strptime(data_texto, "%d/%m/%Y").strftime("%Y-%m-%d")
@@ -76,11 +71,9 @@ def obter_dados_fundamentus(page, ticker: str):
 def clicar_secao(page, candidatos: list):
     """
     Tenta clicar em um link do menu ENET testando variações do texto.
-    Retorna True se conseguiu.
     """
     for texto in candidatos:
         try:
-            # Tenta na página principal primeiro
             loc = page.locator(f'a:text-is("{texto}")').first
             loc.wait_for(state="visible", timeout=5000)
             loc.click()
@@ -89,7 +82,6 @@ def clicar_secao(page, candidatos: list):
             pass
 
         try:
-            # Tenta com contains
             loc = page.locator(f'a:has-text("{texto}")').first
             loc.wait_for(state="visible", timeout=5000)
             loc.click()
@@ -97,7 +89,6 @@ def clicar_secao(page, candidatos: list):
         except PlaywrightTimeout:
             pass
 
-        # Tenta em cada frame
         for frame in page.frames:
             try:
                 loc = frame.locator(f'a:has-text("{texto}")').first
@@ -116,7 +107,6 @@ def extrair_tabela_enet(page) -> pd.DataFrame | None:
     """
     page.wait_for_timeout(4000)
 
-    # Tentar encontrar tabela em todos os frames
     frames_para_tentar = [page] + list(page.frames)
 
     for contexto in frames_para_tentar:
@@ -125,7 +115,6 @@ def extrair_tabela_enet(page) -> pd.DataFrame | None:
             if not tabelas:
                 continue
 
-            # Pegar a maior tabela (mais linhas)
             melhor = None
             melhor_linhas = 0
             for t in tabelas:
@@ -151,7 +140,6 @@ def converter_valor(valor) -> float | None:
     s = str(valor).strip()
     if s in ("", "-", "—"):
         return None
-    # Remove pontos de milhar, troca vírgula decimal
     s = re.sub(r"\s", "", s)
     s = s.replace(".", "").replace(",", ".")
     try:
@@ -163,7 +151,6 @@ def converter_valor(valor) -> float | None:
 def extrair_enet(page, url_enet: str) -> dict:
     """
     Acessa o ENET e extrai BP ativo, BP passivo, DRE e DFC.
-    Retorna dicionário com DataFrames.
     """
     print(f"  🏛️  ENET: {url_enet}")
     page.goto(url_enet, wait_until="domcontentloaded", timeout=60000)
@@ -189,7 +176,6 @@ def extrair_enet(page, url_enet: str) -> dict:
             print(f"    ✅  {len(df)} linhas extraídas")
             dados[chave] = df
 
-        # Voltar para a página do ENET antes do próximo clique
         page.go_back()
         page.wait_for_timeout(3000)
 
@@ -320,8 +306,8 @@ def main():
     print("🔍 ETL CVM via Playwright - MODO PREVIEW (sem Supabase)")
     print("=" * 80)
 
-    # Lista de tickers para testar (você pode mudar)
-    tickers = ["PETR4", "VALE3", "WEGE3"]  # Exemplo: 3 empresas
+    # Lista de tickers para testar
+    tickers = ["PETR4", "VALE3", "WEGE3"]
     
     print(f"\n📋 Tickers para processar: {', '.join(tickers)}\n")
 
@@ -329,7 +315,7 @@ def main():
     erros = 0
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=500)  # Visível para debug
+        browser = p.chromium.launch(headless=False, slow_mo=500)
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -362,7 +348,6 @@ def main():
                 print(f"  ❌ Erro ao processar {ticker}: {e}")
                 erros += 1
 
-            # Pausa entre empresas
             time.sleep(2)
 
         browser.close()
