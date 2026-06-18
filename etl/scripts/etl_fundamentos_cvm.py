@@ -140,43 +140,40 @@ def extrair_patrimonio_liquido(df):
     return df_pl[['CD_CVM', 'DT_REFER', 'VL_CONTA']].rename(columns={'VL_CONTA': 'patrimonio_liquido'}).set_index(['CD_CVM', 'DT_REFER'])
 
 def extrair_depreciacao_amortizacao(df):
+    """
+    Extrai Depreciação e Amortização do DFC (Método Indireto).
+    Busca pela DESCRIÇÃO da conta, não pelo código, pois os códigos não são padronizados.
+    """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
-    # 1. Tenta 6.01.01.04
-    df_604 = df[df['CD_CONTA_STR'] == '6.01.01.04'].copy()
-    if not df_604.empty:
-        agg_604 = df_604.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-        agg_604.columns = ['CD_CVM', 'DT_REFER', 'da_604']
-    else:
-        agg_604 = pd.DataFrame(columns=['CD_CVM', 'DT_REFER', 'da_604'])
-
-    # 2. Tenta 6.01.01.02
-    df_602 = df[df['CD_CONTA_STR'] == '6.01.01.02'].copy()
-    if not df_602.empty:
-        agg_602 = df_602.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-        agg_602.columns = ['CD_CVM', 'DT_REFER', 'da_602']
-    else:
-        agg_602 = pd.DataFrame(columns=['CD_CVM', 'DT_REFER', 'da_602'])
-
-    # 3. Tenta 6.01.01.05
-    df_605 = df[df['CD_CONTA_STR'] == '6.01.01.05'].copy()
-    if not df_605.empty:
-        agg_605 = df_605.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-        agg_605.columns = ['CD_CVM', 'DT_REFER', 'da_605']
-    else:
-        agg_605 = pd.DataFrame(columns=['CD_CVM', 'DT_REFER', 'da_605'])
-
-    # Merge em cascata
-    merged = agg_604.merge(agg_602, on=['CD_CVM', 'DT_REFER'], how='outer')
-    merged = merged.merge(agg_605, on=['CD_CVM', 'DT_REFER'], how='outer')
-
-    # Prioriza 604 > 602 > 605 e garante que seja positivo (abs)
-    merged['depreciacao_amortizacao'] = merged['da_604'].combine_first(merged['da_602']).combine_first(merged['da_605'])
-    merged['depreciacao_amortizacao'] = merged['depreciacao_amortizacao'].abs()
+    # Filtra apenas contas da seção 6.01.01 (ajustes do DFC método indireto)
+    df_ajustes = df[df['CD_CONTA_STR'].str.startswith('6.01.01', na=False)].copy()
     
-    return merged[['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']].set_index(['CD_CVM', 'DT_REFER'])
-
+    if df_ajustes.empty:
+        return pd.DataFrame()
+    
+    # Busca pela DESCRIÇÃO que contenha "deprecia", "amortiza" ou "exaustão"
+    mask_da = (
+        df_ajustes['DS_CONTA'].astype(str).str.contains('deprecia', case=False, na=False) |
+        df_ajustes['DS_CONTA'].astype(str).str.contains('amortiza', case=False, na=False) |
+        df_ajustes['DS_CONTA'].astype(str).str.contains('exaustão', case=False, na=False) |
+        df_ajustes['DS_CONTA'].astype(str).str.contains('exaustao', case=False, na=False)
+    )
+    
+    df_da = df_ajustes[mask_da].copy()
+    
+    if df_da.empty:
+        return pd.DataFrame()
+    
+    # Soma TODAS as contas que contêm D&A na descrição
+    agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg.columns = ['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']
+    
+    # Garante que seja positivo (abs)
+    agg['depreciacao_amortizacao'] = agg['depreciacao_amortizacao'].abs()
+    
+    return agg.set_index(['CD_CVM', 'DT_REFER'])
 
 def processar_csv_dre(df_csv, mapeamento):
     frames = {}
