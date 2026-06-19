@@ -22,10 +22,9 @@ MAPEAMENTO_BPA = {
     'caixa':            r'^1\.01\.01$',
 }
 
-# Mapeamento BPP ajustado (passivo_total mantido para auditoria, mas não usado para cálculo de PL)
+# Mapeamento BPP ajustado - REMOVIDO divida_bruta (agora usa função específica)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
-    'divida_bruta':       r'^2\.02$',
     'passivo_total':      r'^2$',
 }
 
@@ -139,6 +138,41 @@ def extrair_patrimonio_liquido(df):
     
     return df_pl[['CD_CVM', 'DT_REFER', 'VL_CONTA']].rename(columns={'VL_CONTA': 'patrimonio_liquido'}).set_index(['CD_CVM', 'DT_REFER'])
 
+
+def extrair_divida_bruta(df):
+    """
+    Extrai Dívida Bruta do BPP.
+    Soma apenas contas de dívida financeira real:
+    - 2.02.01: Empréstimos e Financiamentos
+    - 2.02.02: Debêntures
+    
+    NÃO inclui:
+    - 2.02.03: Tributos Diferidos
+    - 2.02.04: Provisões
+    - 2.02.05: Passivos sobre Ativos Não-Correntes
+    - 2.02.06: Lucros e Receitas a Apropriar
+    """
+    df = df.copy()
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    
+    # Filtra apenas contas de dívida financeira real
+    mask_divida = (
+        df['CD_CONTA_STR'].str.startswith('2.02.01', na=False) |
+        df['CD_CONTA_STR'].str.startswith('2.02.02', na=False)
+    )
+    
+    df_divida = df[mask_divida].copy()
+    
+    if df_divida.empty:
+        return pd.DataFrame()
+    
+    # Soma todas as contas de dívida
+    agg = df_divida.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg.columns = ['CD_CVM', 'DT_REFER', 'divida_bruta']
+    
+    return agg.set_index(['CD_CVM', 'DT_REFER'])
+
+
 def extrair_depreciacao_amortizacao(df):
     """
     Extrai Depreciação e Amortização do DFC (Método Indireto).
@@ -174,6 +208,7 @@ def extrair_depreciacao_amortizacao(df):
     agg['depreciacao_amortizacao'] = agg['depreciacao_amortizacao'].abs()
     
     return agg.set_index(['CD_CVM', 'DT_REFER'])
+
 
 def processar_csv_dre(df_csv, mapeamento):
     frames = {}
@@ -265,6 +300,14 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                         resultado['patrimonio_liquido'] = pl
                     else:
                         resultado['patrimonio_liquido'] = resultado['patrimonio_liquido'].combine_first(pl)
+                
+                # CORREÇÃO: Extrair Dívida Bruta apenas de contas de dívida financeira real
+                div = extrair_divida_bruta(df)
+                if not div.empty:
+                    if 'divida_bruta' not in resultado:
+                        resultado['divida_bruta'] = div
+                    else:
+                        resultado['divida_bruta'] = resultado['divida_bruta'].combine_first(div)
 
             # 4. Processar DFC_MI
             for nome in dfc_csv:
