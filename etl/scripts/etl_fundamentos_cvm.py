@@ -16,16 +16,15 @@ MAPEAMENTO_DRE = {
     'ebit':            r'^3\.05$',
 }
 
-# CORREÇÃO: Removido 'caixa' do MAPEAMENTO_BPA (agora usa função específica com prioridade)
+# CORREÇÃO: Removido 'caixa' do MAPEAMENTO_BPA (agora usa função específica)
 MAPEAMENTO_BPA = {
     'ativo_total':      r'^1$',
     'ativo_circulante': r'^1\.01$',
 }
 
-# CORREÇÃO: Dívida Bruta captura apenas 2.02.01 e 2.02.02 (Empréstimos e Debêntures)
+# CORREÇÃO: Removido 'divida_bruta' do MAPEAMENTO_BPP (agora usa função específica)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
-    'divida_bruta':       r'^2\.02\.0[12]',
     'passivo_total':      r'^2$',
 }
 
@@ -85,37 +84,61 @@ def extrair_lucro_liquido(df):
 
 def extrair_caixa(df):
     """
-    CORREÇÃO CRÍTICA: Extrai caixa com prioridade para evitar dupla contagem.
-    
-    Prioridade 1: Conta exata 1.01.01 (Caixa e Equivalentes de Caixa)
-                  Existe em 99,5% das empresas (427 de 429)
-    
-    Prioridade 2: Se não existir, soma as subcontas 1.01.01.*
-                  (apenas para os 0,5% restantes)
+    Caixa:
+    Prioridade 1 -> 1.01.01
+    Prioridade 2 -> soma das filhas 1.01.01.*
     """
+
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-    
-    # PRIORIDADE 1: Conta exata 1.01.01
-    df_mae = df[df['CD_CONTA_STR'] == '1.01.01'].copy()
-    
-    if not df_mae.empty:
-        # Agrega por empresa e data, pegando o primeiro valor
-        agg = df_mae.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
-        agg.columns = ['CD_CVM', 'DT_REFER', 'caixa']
-        return agg.set_index(['CD_CVM', 'DT_REFER'])
-    
-    # PRIORIDADE 2: Se não existir 1.01.01, soma as subcontas 1.01.01.*
-    df_filhas = df[df['CD_CONTA_STR'].str.startswith('1.01.01.', na=False)].copy()
-    
-    if not df_filhas.empty:
-        # Soma todas as subcontas
-        agg = df_filhas.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-        agg.columns = ['CD_CVM', 'DT_REFER', 'caixa']
-        return agg.set_index(['CD_CVM', 'DT_REFER'])
-    
-    # PRIORIDADE 3: Se não existir nada, retorna DataFrame vazio
-    return pd.DataFrame()
+
+    resultado = []
+
+    # CONTA MÃE
+    mask_mae = df['CD_CONTA_STR'] == '1.01.01'
+
+    if mask_mae.any():
+        mae = (
+            df[mask_mae]
+            .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
+            .first()
+            .reset_index()
+        )
+
+        mae.columns = ['CD_CVM', 'DT_REFER', 'caixa']
+        mae['prioridade'] = 1
+        resultado.append(mae)
+
+    # FILHAS
+    mask_filhas = df['CD_CONTA_STR'].str.startswith('1.01.01.', na=False)
+
+    if mask_filhas.any():
+        filhas = (
+            df[mask_filhas]
+            .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
+            .sum()
+            .reset_index()
+        )
+
+        filhas.columns = ['CD_CVM', 'DT_REFER', 'caixa']
+        filhas['prioridade'] = 2
+        resultado.append(filhas)
+
+    if not resultado:
+        return pd.DataFrame()
+
+    df_res = pd.concat(resultado, ignore_index=True)
+
+    df_res = (
+        df_res
+        .sort_values(['CD_CVM', 'DT_REFER', 'prioridade'])
+        .drop_duplicates(['CD_CVM', 'DT_REFER'], keep='first')
+    )
+
+    return (
+        df_res[['CD_CVM', 'DT_REFER', 'caixa']]
+        .set_index(['CD_CVM', 'DT_REFER'])
+    )
 
 
 def extrair_patrimonio_liquido(df):
@@ -173,36 +196,127 @@ def extrair_patrimonio_liquido(df):
 
 def extrair_divida_bruta(df):
     """
-    Extrai Dívida Bruta do BPP.
-    Soma apenas contas de dívida financeira real:
-    - 2.02.01: Empréstimos e Financiamentos
-    - 2.02.02: Debêntures
-    
-    NÃO inclui:
-    - 2.02.03: Tributos Diferidos
-    - 2.02.04: Provisões
-    - 2.02.05: Passivos sobre Ativos Não-Correntes
-    - 2.02.06: Lucros e Receitas a Apropriar
+    Dívida Bruta:
+
+    2.02.01 = empréstimos e financiamentos LP
+    2.02.02 = debêntures LP
+
+    Prioridade:
+    1) Conta consolidada
+    2) Soma das subcontas
+
+    Evita dupla contagem.
     """
+
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
-    
-    # Filtra apenas contas de dívida financeira real
-    mask_divida = (
-        df['CD_CONTA_STR'].str.startswith('2.02.01', na=False) |
-        df['CD_CONTA_STR'].str.startswith('2.02.02', na=False)
-    )
-    
-    df_divida = df[mask_divida].copy()
-    
-    if df_divida.empty:
+
+    resultado = []
+
+    # ============
+    # 2.02.01
+    # ============
+
+    mask_201 = df['CD_CONTA_STR'] == '2.02.01'
+
+    if mask_201.any():
+        c201 = (
+            df[mask_201]
+            .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
+            .first()
+            .reset_index()
+        )
+
+        c201.columns = ['CD_CVM', 'DT_REFER', 'valor']
+        c201['grupo'] = '201'
+        c201['prioridade'] = 1
+
+        resultado.append(c201)
+
+    mask_201_sub = df['CD_CONTA_STR'].str.startswith('2.02.01.', na=False)
+
+    if mask_201_sub.any():
+        c201s = (
+            df[mask_201_sub]
+            .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
+            .sum()
+            .reset_index()
+        )
+
+        c201s.columns = ['CD_CVM', 'DT_REFER', 'valor']
+        c201s['grupo'] = '201'
+        c201s['prioridade'] = 2
+
+        resultado.append(c201s)
+
+    # ============
+    # 2.02.02
+    # ============
+
+    mask_202 = df['CD_CONTA_STR'] == '2.02.02'
+
+    if mask_202.any():
+        c202 = (
+            df[mask_202]
+            .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
+            .first()
+            .reset_index()
+        )
+
+        c202.columns = ['CD_CVM', 'DT_REFER', 'valor']
+        c202['grupo'] = '202'
+        c202['prioridade'] = 1
+
+        resultado.append(c202)
+
+    mask_202_sub = df['CD_CONTA_STR'].str.startswith('2.02.02.', na=False)
+
+    if mask_202_sub.any():
+        c202s = (
+            df[mask_202_sub]
+            .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
+            .sum()
+            .reset_index()
+        )
+
+        c202s.columns = ['CD_CVM', 'DT_REFER', 'valor']
+        c202s['grupo'] = '202'
+        c202s['prioridade'] = 2
+
+        resultado.append(c202s)
+
+    if not resultado:
         return pd.DataFrame()
-    
-    # Soma todas as contas de dívida
-    agg = df_divida.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
-    agg.columns = ['CD_CVM', 'DT_REFER', 'divida_bruta']
-    
-    return agg.set_index(['CD_CVM', 'DT_REFER'])
+
+    tmp = pd.concat(resultado, ignore_index=True)
+
+    tmp = (
+        tmp
+        .sort_values(
+            ['CD_CVM', 'DT_REFER', 'grupo', 'prioridade']
+        )
+        .drop_duplicates(
+            ['CD_CVM', 'DT_REFER', 'grupo'],
+            keep='first'
+        )
+    )
+
+    divida = (
+        tmp
+        .groupby(['CD_CVM', 'DT_REFER'])['valor']
+        .sum()
+        .reset_index()
+    )
+
+    divida.columns = [
+        'CD_CVM',
+        'DT_REFER',
+        'divida_bruta'
+    ]
+
+    return divida.set_index(
+        ['CD_CVM', 'DT_REFER']
+    )
 
 
 def extrair_depreciacao_amortizacao(df):
@@ -354,7 +468,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     else:
                         resultado['patrimonio_liquido'] = resultado['patrimonio_liquido'].combine_first(pl)
                 
-                # CORREÇÃO: Extrair Dívida Bruta apenas de contas de dívida financeira real
+                # CORREÇÃO: Extrair Dívida Bruta com função específica (prioridade)
                 div = extrair_divida_bruta(df)
                 if not div.empty:
                     if 'divida_bruta' not in resultado:
