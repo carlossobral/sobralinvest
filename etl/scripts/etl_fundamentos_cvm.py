@@ -26,6 +26,11 @@ MAPEAMENTO_BPP = {
     'passivo_total':      r'^2$',
 }
 
+# DVA: Contas de Depreciação e Amortização
+MAPEAMENTO_DVA = {
+    'depreciacao_amortizacao': r'^7\.04\.01$',  # Empresas normais
+}
+
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
 COLUNAS_BAL = ['ativo_total', 'ativo_circulante', 'passivo_circulante',
                'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida', 'passivo_total']
@@ -309,40 +314,34 @@ def extrair_divida_bruta(df):
     return divida[['CD_CVM', 'DT_REFER', 'divida_bruta']].set_index(['CD_CVM', 'DT_REFER'])
 
 
-def extrair_depreciacao_amortizacao(df):
+def extrair_depreciacao_amortizacao_dva(df):
     """
-    CORREÇÃO: D&A - Busca pela descrição da conta, não pelo código.
-    Inclui 'deprecia', 'amortiza', 'exaustão' e 'depleção' (para PETR4).
+    D&A via DVA (Demonstração do Valor Adicionado):
+    
+    Contas:
+    - 7.04.01: Depreciação, Amortização e Exaustão (empresas normais)
+    - 7.05.01: Depreciação, Amortização e Exaustão (bancos)
+    
+    CORREÇÃO CRÍTICA:
+    - Valores no DVA são NEGATIVOS (representam reduções)
+    - Aplicar abs() para converter em valores positivos
+    - Capturar ambas as contas (7.04.01 e 7.05.01)
     """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
-    # Filtra apenas contas da seção 6.01.01 (ajustes do DFC método indireto)
-    df_ajustes = df[df['CD_CONTA_STR'].str.startswith('6.01.01', na=False)].copy()
-    
-    if df_ajustes.empty:
-        return pd.DataFrame()
-    
-    # Busca pela DESCRIÇÃO que contenha palavras-chave de D&A
-    mask_da = (
-        df_ajustes['DS_CONTA'].astype(str).str.contains('deprecia', case=False, na=False) |
-        df_ajustes['DS_CONTA'].astype(str).str.contains('amortiza', case=False, na=False) |
-        df_ajustes['DS_CONTA'].astype(str).str.contains('exaustão', case=False, na=False) |
-        df_ajustes['DS_CONTA'].astype(str).str.contains('exaustao', case=False, na=False) |
-        df_ajustes['DS_CONTA'].astype(str).str.contains('depleção', case=False, na=False) |
-        df_ajustes['DS_CONTA'].astype(str).str.contains('deplecao', case=False, na=False)
-    )
-    
-    df_da = df_ajustes[mask_da].copy()
+    # Capturar contas 7.04.01 (empresas normais) e 7.05.01 (bancos)
+    mask_da = df['CD_CONTA_STR'].isin(['7.04.01', '7.05.01'])
+    df_da = df[mask_da].copy()
     
     if df_da.empty:
         return pd.DataFrame()
     
-    # Soma TODAS as contas que contêm D&A na descrição
+    # Soma os valores (pode haver ambas as contas para algumas empresas)
     agg = df_da.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
     agg.columns = ['CD_CVM', 'DT_REFER', 'depreciacao_amortizacao']
     
-    # Garante que seja positivo (abs)
+    # Garante que seja positivo (abs) - valores no DVA são negativos
     agg['depreciacao_amortizacao'] = agg['depreciacao_amortizacao'].abs()
     
     return agg.set_index(['CD_CVM', 'DT_REFER'])
@@ -379,6 +378,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             bpa_csv  = [n for n in csvs_con if '_BPA_' in n.upper()]
             bpp_csv  = [n for n in csvs_con if '_BPP_' in n.upper()]
             dfc_csv  = [n for n in csvs_con if '_DFC_MI_' in n.upper()]
+            dva_csv  = [n for n in csvs_con if '_DVA_' in n.upper()]
 
             # 1. Processar DRE
             for nome in dre_csv:
@@ -456,7 +456,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     else:
                         resultado['patrimonio_liquido'] = resultado['patrimonio_liquido'].combine_first(pl)
                 
-                # CORREÇÃO: Extrair Dívida Bruta (2.01.04 + 2.02.01)
+                # Extrair Dívida Bruta (2.01.04 + 2.02.01)
                 div = extrair_divida_bruta(df)
                 if not div.empty:
                     if 'divida_bruta' not in resultado:
@@ -464,7 +464,25 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     else:
                         resultado['divida_bruta'] = resultado['divida_bruta'].combine_first(div)
 
-            # 4. Processar DFC_MI
+            # 4. Processar DVA (NOVO: D&A via DVA)
+            for nome in dva_csv:
+                df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
+                df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
+                df['CD_CONTA'] = df['CD_CONTA'].astype(str).str.strip()
+                if 'ORDEM_EXERC' in df.columns:
+                    norm = df['ORDEM_EXERC'].astype(str).str.upper().str.strip()
+                    norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
+                    df = df[norm == 'ULTIMO']
+                
+                # Extrair D&A do DVA (contas 7.04.01 e 7.05.01)
+                da = extrair_depreciacao_amortizacao_dva(df)
+                if not da.empty:
+                    if 'depreciacao_amortizacao' not in resultado:
+                        resultado['depreciacao_amortizacao'] = da
+                    else:
+                        resultado['depreciacao_amortizacao'] = resultado['depreciacao_amortizacao'].combine_first(da)
+
+            # 5. Processar DFC_MI (apenas para caixa fallback)
             for nome in dfc_csv:
                 df = pd.read_csv(z.open(nome), sep=';', encoding='latin1', low_memory=False)
                 df['VL_CONTA'] = pd.to_numeric(df['VL_CONTA'], errors='coerce').fillna(0)
@@ -481,14 +499,6 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                         resultado['caixa_dfc'] = caixa_dfc
                     else:
                         resultado['caixa_dfc'] = resultado['caixa_dfc'].combine_first(caixa_dfc)
-                
-                # Extrair D&A
-                da = extrair_depreciacao_amortizacao(df)
-                if not da.empty:
-                    if 'depreciacao_amortizacao' not in resultado:
-                        resultado['depreciacao_amortizacao'] = da
-                    else:
-                        resultado['depreciacao_amortizacao'] = resultado['depreciacao_amortizacao'].combine_first(da)
 
         if not resultado:
             return pd.DataFrame()
@@ -496,7 +506,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
         # ==========================================================
-        # ORDEM DE OPERAÇÕES CORRIGIDA
+        # ORDEM DE OPERAÇÕES
         # ==========================================================
         
         # 1. Cálculos derivados iniciais (ainda em milhares)
