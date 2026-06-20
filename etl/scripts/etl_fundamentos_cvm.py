@@ -16,13 +16,11 @@ MAPEAMENTO_DRE = {
     'ebit':            r'^3\.05$',
 }
 
-# CORREÇÃO: Removido 'caixa' do MAPEAMENTO_BPA (agora usa função específica)
 MAPEAMENTO_BPA = {
     'ativo_total':      r'^1$',
     'ativo_circulante': r'^1\.01$',
 }
 
-# CORREÇÃO: Removido 'divida_bruta' do MAPEAMENTO_BPP (agora usa função específica)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
     'passivo_total':      r'^2$',
@@ -87,8 +85,6 @@ def extrair_caixa(df):
     Caixa do BPA:
     Prioridade 1 -> Conta mãe 1.01.01 (99.53% das empresas)
     Prioridade 2 -> Soma das filhas 1.01.01.* (fallback para 0.47% restante)
-    
-    CORREÇÃO: Usa startswith('1.01.01') para capturar todas as variações
     """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
@@ -141,23 +137,17 @@ def extrair_caixa_dfc(df):
     """
     Caixa do DFC (fallback):
     Conta 6.05.02 = Saldo Final de Caixa e Equivalentes
-    
-    CORREÇÃO: Extrai sempre (Opção 2B) e decide no final qual usar
     """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
-    # Busca conta 6.05.02 (Saldo Final de Caixa e Equivalentes)
     df_caixa = df[df['CD_CONTA_STR'] == '6.05.02'].copy()
     
     if df_caixa.empty:
         return pd.DataFrame()
     
-    # Agrega por empresa e data
     agg = df_caixa.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
     agg.columns = ['CD_CVM', 'DT_REFER', 'caixa_dfc']
-    
-    # Garante que seja positivo (abs)
     agg['caixa_dfc'] = agg['caixa_dfc'].abs()
     
     return agg.set_index(['CD_CVM', 'DT_REFER'])
@@ -218,127 +208,105 @@ def extrair_patrimonio_liquido(df):
 
 def extrair_divida_bruta(df):
     """
-    Dívida Bruta:
-
-    2.02.01 = empréstimos e financiamentos LP
-    2.02.02 = debêntures LP
-
-    Prioridade:
-    1) Conta consolidada
-    2) Soma das subcontas
-
-    Evita dupla contagem.
+    Dívida Bruta = 2.01.04 (Empréstimos CP) + 2.02.01 (Empréstimos LP)
+    
+    CORREÇÃO CRÍTICA:
+    - Usa .first() em vez de .sum() para evitar dupla contagem hierárquica
+    - Captura conta mãe (2.01.04 e 2.02.01)
+    - Se não encontrar conta mãe, usa subcontas (2.01.04.* e 2.02.01.*)
     """
-
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
 
     resultado = []
 
     # ============
-    # 2.02.01
+    # 2.01.04 - Dívida de Curto Prazo
     # ============
-
-    mask_201 = df['CD_CONTA_STR'] == '2.02.01'
-
-    if mask_201.any():
-        c201 = (
-            df[mask_201]
+    
+    # PRIORIDADE 1: Conta mãe 2.01.04
+    mask_20104_mae = df['CD_CONTA_STR'] == '2.01.04'
+    if mask_20104_mae.any():
+        c20104_mae = (
+            df[mask_20104_mae]
             .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
             .first()
             .reset_index()
         )
-
-        c201.columns = ['CD_CVM', 'DT_REFER', 'valor']
-        c201['grupo'] = '201'
-        c201['prioridade'] = 1
-
-        resultado.append(c201)
-
-    mask_201_sub = df['CD_CONTA_STR'].str.startswith('2.02.01.', na=False)
-
-    if mask_201_sub.any():
-        c201s = (
-            df[mask_201_sub]
+        c20104_mae.columns = ['CD_CVM', 'DT_REFER', 'divida_cp']
+        c20104_mae['grupo'] = '20104'
+        c20104_mae['prioridade'] = 1
+        resultado.append(c20104_mae)
+    
+    # PRIORIDADE 2: Soma das filhas 2.01.04.*
+    mask_20104_filhas = df['CD_CONTA_STR'].str.startswith('2.01.04.', na=False)
+    if mask_20104_filhas.any():
+        c20104_filhas = (
+            df[mask_20104_filhas]
             .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
             .sum()
             .reset_index()
         )
-
-        c201s.columns = ['CD_CVM', 'DT_REFER', 'valor']
-        c201s['grupo'] = '201'
-        c201s['prioridade'] = 2
-
-        resultado.append(c201s)
+        c20104_filhas.columns = ['CD_CVM', 'DT_REFER', 'divida_cp']
+        c20104_filhas['grupo'] = '20104'
+        c20104_filhas['prioridade'] = 2
+        resultado.append(c20104_filhas)
 
     # ============
-    # 2.02.02
+    # 2.02.01 - Dívida de Longo Prazo
     # ============
-
-    mask_202 = df['CD_CONTA_STR'] == '2.02.02'
-
-    if mask_202.any():
-        c202 = (
-            df[mask_202]
+    
+    # PRIORIDADE 1: Conta mãe 2.02.01
+    mask_20201_mae = df['CD_CONTA_STR'] == '2.02.01'
+    if mask_20201_mae.any():
+        c20201_mae = (
+            df[mask_20201_mae]
             .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
             .first()
             .reset_index()
         )
-
-        c202.columns = ['CD_CVM', 'DT_REFER', 'valor']
-        c202['grupo'] = '202'
-        c202['prioridade'] = 1
-
-        resultado.append(c202)
-
-    mask_202_sub = df['CD_CONTA_STR'].str.startswith('2.02.02.', na=False)
-
-    if mask_202_sub.any():
-        c202s = (
-            df[mask_202_sub]
+        c20201_mae.columns = ['CD_CVM', 'DT_REFER', 'divida_lp']
+        c20201_mae['grupo'] = '20201'
+        c20201_mae['prioridade'] = 1
+        resultado.append(c20201_mae)
+    
+    # PRIORIDADE 2: Soma das filhas 2.02.01.*
+    mask_20201_filhas = df['CD_CONTA_STR'].str.startswith('2.02.01.', na=False)
+    if mask_20201_filhas.any():
+        c20201_filhas = (
+            df[mask_20201_filhas]
             .groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA']
             .sum()
             .reset_index()
         )
-
-        c202s.columns = ['CD_CVM', 'DT_REFER', 'valor']
-        c202s['grupo'] = '202'
-        c202s['prioridade'] = 2
-
-        resultado.append(c202s)
+        c20201_filhas.columns = ['CD_CVM', 'DT_REFER', 'divida_lp']
+        c20201_filhas['grupo'] = '20201'
+        c20201_filhas['prioridade'] = 2
+        resultado.append(c20201_filhas)
 
     if not resultado:
         return pd.DataFrame()
 
     tmp = pd.concat(resultado, ignore_index=True)
 
+    # Aplica prioridade: conta mãe > subcontas
     tmp = (
         tmp
-        .sort_values(
-            ['CD_CVM', 'DT_REFER', 'grupo', 'prioridade']
-        )
-        .drop_duplicates(
-            ['CD_CVM', 'DT_REFER', 'grupo'],
-            keep='first'
-        )
+        .sort_values(['CD_CVM', 'DT_REFER', 'grupo', 'prioridade'])
+        .drop_duplicates(['CD_CVM', 'DT_REFER', 'grupo'], keep='first')
     )
 
+    # Soma CP + LP
     divida = (
         tmp
-        .groupby(['CD_CVM', 'DT_REFER'])['valor']
+        .groupby(['CD_CVM', 'DT_REFER'])[['divida_cp', 'divida_lp']]
         .sum()
         .reset_index()
     )
 
-    divida.columns = [
-        'CD_CVM',
-        'DT_REFER',
-        'divida_bruta'
-    ]
+    divida['divida_bruta'] = divida['divida_cp'].fillna(0) + divida['divida_lp'].fillna(0)
 
-    return divida.set_index(
-        ['CD_CVM', 'DT_REFER']
-    )
+    return divida[['CD_CVM', 'DT_REFER', 'divida_bruta']].set_index(['CD_CVM', 'DT_REFER'])
 
 
 def extrair_depreciacao_amortizacao(df):
@@ -448,14 +416,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 
                 frames = processar_csv_dre(df, MAPEAMENTO_BPA)
                 
-                # CORREÇÃO: Usar combine_first em vez de sobrescrever
                 for conta, frame in frames.items():
                     if conta not in resultado:
                         resultado[conta] = frame
                     else:
                         resultado[conta] = resultado[conta].combine_first(frame)
                 
-                # CORREÇÃO: Extrair caixa do BPA com função específica (prioridade)
+                # Extrair caixa do BPA
                 caixa_bpa = extrair_caixa(df)
                 if not caixa_bpa.empty:
                     if 'caixa' not in resultado:
@@ -475,14 +442,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 
                 frames = processar_csv_dre(df, MAPEAMENTO_BPP)
                 
-                # CORREÇÃO: Usar combine_first em vez de sobrescrever
                 for conta, frame in frames.items():
                     if conta not in resultado:
                         resultado[conta] = frame
                     else:
                         resultado[conta] = resultado[conta].combine_first(frame)
                 
-                # Extrair Patrimônio Líquido com a lógica robusta de descrição + código
+                # Extrair Patrimônio Líquido
                 pl = extrair_patrimonio_liquido(df)
                 if not pl.empty:
                     if 'patrimonio_liquido' not in resultado:
@@ -490,7 +456,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     else:
                         resultado['patrimonio_liquido'] = resultado['patrimonio_liquido'].combine_first(pl)
                 
-                # CORREÇÃO: Extrair Dívida Bruta com função específica (prioridade)
+                # CORREÇÃO: Extrair Dívida Bruta (2.01.04 + 2.02.01)
                 div = extrair_divida_bruta(df)
                 if not div.empty:
                     if 'divida_bruta' not in resultado:
@@ -508,7 +474,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     df = df[norm == 'ULTIMO']
                 
-                # CORREÇÃO: Extrair caixa do DFC (Opção 2B - sempre extrair)
+                # Extrair caixa do DFC (fallback)
                 caixa_dfc = extrair_caixa_dfc(df)
                 if not caixa_dfc.empty:
                     if 'caixa_dfc' not in resultado:
@@ -549,12 +515,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
-        # 3. CORREÇÃO: Resolver caixa com fallback DFC (Opção I - apenas quando BPA é NULL)
+        # 3. Resolver caixa com fallback DFC
         if 'caixa_dfc' in df_final.columns:
-            # Converter caixa_dfc para reais (se existir)
             df_final['caixa_dfc'] = pd.to_numeric(df_final['caixa_dfc'], errors='coerce') * 1000
             
-            # Validação cruzada (log warning se divergência > 5%)
+            # Validação cruzada
             if 'caixa' in df_final.columns:
                 mask_ambos = df_final['caixa'].notna() & df_final['caixa_dfc'].notna()
                 if mask_ambos.any():
@@ -563,13 +528,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     if mask_divergencia.any():
                         print(f"  ⚠️ WARNING: {mask_divergencia.sum()} empresas com divergência >5% entre BPA e DFC")
             
-            # Fallback: usar DFC apenas quando BPA é NULL (Opção I)
+            # Fallback: usar DFC apenas quando BPA é NULL
             df_final['caixa'] = df_final['caixa'].combine_first(df_final['caixa_dfc'])
-            
-            # Remover coluna temporária
             df_final = df_final.drop(columns=['caixa_dfc'])
 
-        # 4. Cálculo da Dívida Líquida (após a escala, usando valores já em reais)
+        # 4. Cálculo da Dívida Líquida
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
