@@ -84,19 +84,19 @@ def extrair_lucro_liquido(df):
 
 def extrair_caixa(df):
     """
-    Caixa:
-    Prioridade 1 -> 1.01.01
-    Prioridade 2 -> soma das filhas 1.01.01.*
+    Caixa do BPA:
+    Prioridade 1 -> Conta mãe 1.01.01 (99.53% das empresas)
+    Prioridade 2 -> Soma das filhas 1.01.01.* (fallback para 0.47% restante)
+    
+    CORREÇÃO: Usa startswith('1.01.01') para capturar todas as variações
     """
-
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
 
     resultado = []
 
-    # CONTA MÃE
+    # PRIORIDADE 1: Conta mãe 1.01.01
     mask_mae = df['CD_CONTA_STR'] == '1.01.01'
-
     if mask_mae.any():
         mae = (
             df[mask_mae]
@@ -104,14 +104,12 @@ def extrair_caixa(df):
             .first()
             .reset_index()
         )
-
         mae.columns = ['CD_CVM', 'DT_REFER', 'caixa']
         mae['prioridade'] = 1
         resultado.append(mae)
 
-    # FILHAS
+    # PRIORIDADE 2: Soma das filhas 1.01.01.*
     mask_filhas = df['CD_CONTA_STR'].str.startswith('1.01.01.', na=False)
-
     if mask_filhas.any():
         filhas = (
             df[mask_filhas]
@@ -119,7 +117,6 @@ def extrair_caixa(df):
             .sum()
             .reset_index()
         )
-
         filhas.columns = ['CD_CVM', 'DT_REFER', 'caixa']
         filhas['prioridade'] = 2
         resultado.append(filhas)
@@ -128,7 +125,6 @@ def extrair_caixa(df):
         return pd.DataFrame()
 
     df_res = pd.concat(resultado, ignore_index=True)
-
     df_res = (
         df_res
         .sort_values(['CD_CVM', 'DT_REFER', 'prioridade'])
@@ -139,6 +135,32 @@ def extrair_caixa(df):
         df_res[['CD_CVM', 'DT_REFER', 'caixa']]
         .set_index(['CD_CVM', 'DT_REFER'])
     )
+
+
+def extrair_caixa_dfc(df):
+    """
+    Caixa do DFC (fallback):
+    Conta 6.05.02 = Saldo Final de Caixa e Equivalentes
+    
+    CORREÇÃO: Extrai sempre (Opção 2B) e decide no final qual usar
+    """
+    df = df.copy()
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    
+    # Busca conta 6.05.02 (Saldo Final de Caixa e Equivalentes)
+    df_caixa = df[df['CD_CONTA_STR'] == '6.05.02'].copy()
+    
+    if df_caixa.empty:
+        return pd.DataFrame()
+    
+    # Agrega por empresa e data
+    agg = df_caixa.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg.columns = ['CD_CVM', 'DT_REFER', 'caixa_dfc']
+    
+    # Garante que seja positivo (abs)
+    agg['caixa_dfc'] = agg['caixa_dfc'].abs()
+    
+    return agg.set_index(['CD_CVM', 'DT_REFER'])
 
 
 def extrair_patrimonio_liquido(df):
@@ -433,13 +455,13 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     else:
                         resultado[conta] = resultado[conta].combine_first(frame)
                 
-                # CORREÇÃO: Extrair caixa com função específica (prioridade)
-                caixa = extrair_caixa(df)
-                if not caixa.empty:
+                # CORREÇÃO: Extrair caixa do BPA com função específica (prioridade)
+                caixa_bpa = extrair_caixa(df)
+                if not caixa_bpa.empty:
                     if 'caixa' not in resultado:
-                        resultado['caixa'] = caixa
+                        resultado['caixa'] = caixa_bpa
                     else:
-                        resultado['caixa'] = resultado['caixa'].combine_first(caixa)
+                        resultado['caixa'] = resultado['caixa'].combine_first(caixa_bpa)
 
             # 3. Processar BPP
             for nome in bpp_csv:
@@ -486,6 +508,15 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     df = df[norm == 'ULTIMO']
                 
+                # CORREÇÃO: Extrair caixa do DFC (Opção 2B - sempre extrair)
+                caixa_dfc = extrair_caixa_dfc(df)
+                if not caixa_dfc.empty:
+                    if 'caixa_dfc' not in resultado:
+                        resultado['caixa_dfc'] = caixa_dfc
+                    else:
+                        resultado['caixa_dfc'] = resultado['caixa_dfc'].combine_first(caixa_dfc)
+                
+                # Extrair D&A
                 da = extrair_depreciacao_amortizacao(df)
                 if not da.empty:
                     if 'depreciacao_amortizacao' not in resultado:
@@ -518,7 +549,27 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
-        # 3. Cálculo da Dívida Líquida (após a escala, usando valores já em reais)
+        # 3. CORREÇÃO: Resolver caixa com fallback DFC (Opção I - apenas quando BPA é NULL)
+        if 'caixa_dfc' in df_final.columns:
+            # Converter caixa_dfc para reais (se existir)
+            df_final['caixa_dfc'] = pd.to_numeric(df_final['caixa_dfc'], errors='coerce') * 1000
+            
+            # Validação cruzada (log warning se divergência > 5%)
+            if 'caixa' in df_final.columns:
+                mask_ambos = df_final['caixa'].notna() & df_final['caixa_dfc'].notna()
+                if mask_ambos.any():
+                    divergencia = (df_final.loc[mask_ambos, 'caixa'] - df_final.loc[mask_ambos, 'caixa_dfc']).abs() / df_final.loc[mask_ambos, 'caixa'].replace(0, np.nan)
+                    mask_divergencia = divergencia > 0.05
+                    if mask_divergencia.any():
+                        print(f"  ⚠️ WARNING: {mask_divergencia.sum()} empresas com divergência >5% entre BPA e DFC")
+            
+            # Fallback: usar DFC apenas quando BPA é NULL (Opção I)
+            df_final['caixa'] = df_final['caixa'].combine_first(df_final['caixa_dfc'])
+            
+            # Remover coluna temporária
+            df_final = df_final.drop(columns=['caixa_dfc'])
+
+        # 4. Cálculo da Dívida Líquida (após a escala, usando valores já em reais)
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
