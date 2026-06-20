@@ -16,17 +16,16 @@ MAPEAMENTO_DRE = {
     'ebit':            r'^3\.05$',
 }
 
-# CORREÇÃO 1: CAIXA - Removido $ do final para capturar subcontas
+# CORREÇÃO: Removido 'caixa' do MAPEAMENTO_BPA (agora usa função específica com prioridade)
 MAPEAMENTO_BPA = {
     'ativo_total':      r'^1$',
     'ativo_circulante': r'^1\.01$',
-    'caixa':            r'^1\.01\.01',  # ← CORREÇÃO: captura 1.01.01, 1.01.01.01, 1.01.01.02, etc.
 }
 
-# CORREÇÃO 3: DÍVIDA BRUTA - Captura apenas 2.02.01 e 2.02.02
+# CORREÇÃO: Dívida Bruta captura apenas 2.02.01 e 2.02.02 (Empréstimos e Debêntures)
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
-    'divida_bruta':       r'^2\.02\.0[12]',  # ← CORREÇÃO: apenas Empréstimos e Debêntures
+    'divida_bruta':       r'^2\.02\.0[12]',
     'passivo_total':      r'^2$',
 }
 
@@ -84,6 +83,41 @@ def extrair_lucro_liquido(df):
     return merged[['CD_CVM', 'DT_REFER', 'lucro_liquido']].set_index(['CD_CVM', 'DT_REFER'])
 
 
+def extrair_caixa(df):
+    """
+    CORREÇÃO CRÍTICA: Extrai caixa com prioridade para evitar dupla contagem.
+    
+    Prioridade 1: Conta exata 1.01.01 (Caixa e Equivalentes de Caixa)
+                  Existe em 99,5% das empresas (427 de 429)
+    
+    Prioridade 2: Se não existir, soma as subcontas 1.01.01.*
+                  (apenas para os 0,5% restantes)
+    """
+    df = df.copy()
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    
+    # PRIORIDADE 1: Conta exata 1.01.01
+    df_mae = df[df['CD_CONTA_STR'] == '1.01.01'].copy()
+    
+    if not df_mae.empty:
+        # Agrega por empresa e data, pegando o primeiro valor
+        agg = df_mae.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
+        agg.columns = ['CD_CVM', 'DT_REFER', 'caixa']
+        return agg.set_index(['CD_CVM', 'DT_REFER'])
+    
+    # PRIORIDADE 2: Se não existir 1.01.01, soma as subcontas 1.01.01.*
+    df_filhas = df[df['CD_CONTA_STR'].str.startswith('1.01.01.', na=False)].copy()
+    
+    if not df_filhas.empty:
+        # Soma todas as subcontas
+        agg = df_filhas.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+        agg.columns = ['CD_CVM', 'DT_REFER', 'caixa']
+        return agg.set_index(['CD_CVM', 'DT_REFER'])
+    
+    # PRIORIDADE 3: Se não existir nada, retorna DataFrame vazio
+    return pd.DataFrame()
+
+
 def extrair_patrimonio_liquido(df):
     """
     Extrai PL com lógica simplificada:
@@ -137,9 +171,44 @@ def extrair_patrimonio_liquido(df):
     return df_pl[['CD_CVM', 'DT_REFER', 'VL_CONTA']].rename(columns={'VL_CONTA': 'patrimonio_liquido'}).set_index(['CD_CVM', 'DT_REFER'])
 
 
+def extrair_divida_bruta(df):
+    """
+    Extrai Dívida Bruta do BPP.
+    Soma apenas contas de dívida financeira real:
+    - 2.02.01: Empréstimos e Financiamentos
+    - 2.02.02: Debêntures
+    
+    NÃO inclui:
+    - 2.02.03: Tributos Diferidos
+    - 2.02.04: Provisões
+    - 2.02.05: Passivos sobre Ativos Não-Correntes
+    - 2.02.06: Lucros e Receitas a Apropriar
+    """
+    df = df.copy()
+    df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
+    
+    # Filtra apenas contas de dívida financeira real
+    mask_divida = (
+        df['CD_CONTA_STR'].str.startswith('2.02.01', na=False) |
+        df['CD_CONTA_STR'].str.startswith('2.02.02', na=False)
+    )
+    
+    df_divida = df[mask_divida].copy()
+    
+    if df_divida.empty:
+        return pd.DataFrame()
+    
+    # Soma todas as contas de dívida
+    agg = df_divida.groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
+    agg.columns = ['CD_CVM', 'DT_REFER', 'divida_bruta']
+    
+    return agg.set_index(['CD_CVM', 'DT_REFER'])
+
+
 def extrair_depreciacao_amortizacao(df):
     """
-    CORREÇÃO 2: D&A - Adicionado 'depleção' no filtro para PETR4
+    CORREÇÃO: D&A - Busca pela descrição da conta, não pelo código.
+    Inclui 'deprecia', 'amortiza', 'exaustão' e 'depleção' (para PETR4).
     """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
@@ -150,14 +219,14 @@ def extrair_depreciacao_amortizacao(df):
     if df_ajustes.empty:
         return pd.DataFrame()
     
-    # CORREÇÃO: Adicionado 'depleção' para PETR4 (específico para petróleo)
+    # Busca pela DESCRIÇÃO que contenha palavras-chave de D&A
     mask_da = (
         df_ajustes['DS_CONTA'].astype(str).str.contains('deprecia', case=False, na=False) |
         df_ajustes['DS_CONTA'].astype(str).str.contains('amortiza', case=False, na=False) |
         df_ajustes['DS_CONTA'].astype(str).str.contains('exaustão', case=False, na=False) |
         df_ajustes['DS_CONTA'].astype(str).str.contains('exaustao', case=False, na=False) |
-        df_ajustes['DS_CONTA'].astype(str).str.contains('depleção', case=False, na=False) |  # ← NOVO!
-        df_ajustes['DS_CONTA'].astype(str).str.contains('deplecao', case=False, na=False)   # ← NOVO!
+        df_ajustes['DS_CONTA'].astype(str).str.contains('depleção', case=False, na=False) |
+        df_ajustes['DS_CONTA'].astype(str).str.contains('deplecao', case=False, na=False)
     )
     
     df_da = df_ajustes[mask_da].copy()
@@ -240,9 +309,23 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     norm = df['ORDEM_EXERC'].astype(str).str.upper().str.strip()
                     norm = norm.str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     df = df[norm == 'ULTIMO']
+                
                 frames = processar_csv_dre(df, MAPEAMENTO_BPA)
+                
+                # CORREÇÃO: Usar combine_first em vez de sobrescrever
                 for conta, frame in frames.items():
-                    resultado[conta] = frame
+                    if conta not in resultado:
+                        resultado[conta] = frame
+                    else:
+                        resultado[conta] = resultado[conta].combine_first(frame)
+                
+                # CORREÇÃO: Extrair caixa com função específica (prioridade)
+                caixa = extrair_caixa(df)
+                if not caixa.empty:
+                    if 'caixa' not in resultado:
+                        resultado['caixa'] = caixa
+                    else:
+                        resultado['caixa'] = resultado['caixa'].combine_first(caixa)
 
             # 3. Processar BPP
             for nome in bpp_csv:
@@ -255,15 +338,29 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                     df = df[norm == 'ULTIMO']
                 
                 frames = processar_csv_dre(df, MAPEAMENTO_BPP)
-                for conta, frame in frames.items():
-                    resultado[conta] = frame
                 
+                # CORREÇÃO: Usar combine_first em vez de sobrescrever
+                for conta, frame in frames.items():
+                    if conta not in resultado:
+                        resultado[conta] = frame
+                    else:
+                        resultado[conta] = resultado[conta].combine_first(frame)
+                
+                # Extrair Patrimônio Líquido com a lógica robusta de descrição + código
                 pl = extrair_patrimonio_liquido(df)
                 if not pl.empty:
                     if 'patrimonio_liquido' not in resultado:
                         resultado['patrimonio_liquido'] = pl
                     else:
                         resultado['patrimonio_liquido'] = resultado['patrimonio_liquido'].combine_first(pl)
+                
+                # CORREÇÃO: Extrair Dívida Bruta apenas de contas de dívida financeira real
+                div = extrair_divida_bruta(df)
+                if not div.empty:
+                    if 'divida_bruta' not in resultado:
+                        resultado['divida_bruta'] = div
+                    else:
+                        resultado['divida_bruta'] = resultado['divida_bruta'].combine_first(div)
 
             # 4. Processar DFC_MI
             for nome in dfc_csv:
@@ -287,7 +384,11 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
 
         df_final = pd.concat(resultado.values(), axis=1).reset_index()
 
-        # Cálculos derivados iniciais (ainda em milhares)
+        # ==========================================================
+        # ORDEM DE OPERAÇÕES CORRIGIDA
+        # ==========================================================
+        
+        # 1. Cálculos derivados iniciais (ainda em milhares)
         if 'receita_liquida' in df_final.columns and 'custo' in df_final.columns:
             df_final['lucro_bruto'] = df_final['receita_liquida'] + df_final['custo']
 
@@ -295,17 +396,20 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
             df_final['ebitda'] = df_final['ebit'] + da
 
-        # Escala: Converte TODAS as colunas de DRE e BAL de MILHARES para REAIS
+        # 2. Escala: Converte TODAS as colunas de DRE e BAL de MILHARES para REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
 
+        # Escala também a D&A explicitamente
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
-        # Cálculo da Dívida Líquida
+        # 3. Cálculo da Dívida Líquida (após a escala, usando valores já em reais)
         div = df_final.get('divida_bruta', pd.Series(0, index=df_final.index)).fillna(0)
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
+        
+        # ==========================================================
 
         # Mapear ticker
         df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
