@@ -6,8 +6,8 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-ANO_INICIAL = 2019
-ANO_FINAL = 2019
+ANO_INICIAL = 2020
+ANO_FINAL = 2020
 
 # Contas validadas
 MAPEAMENTO_DRE = {
