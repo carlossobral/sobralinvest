@@ -7,7 +7,7 @@ from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
 ANO_INICIAL = 2015
-ANO_FINAL = 2017
+ANO_FINAL = 2026
 
 # Contas validadas
 MAPEAMENTO_DRE = {
