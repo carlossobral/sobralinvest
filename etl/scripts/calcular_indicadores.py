@@ -511,7 +511,6 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             ),
             "preco_justo_bazin": (div12m / 0.06) if div12m > 0 else None,
             "preco_teto_medio": (div6a / 0.06) if div6a > 0 else None,
-            "preco_justo_lynch": None,  # calculado abaixo
             "dividendos_12m": div12m,
             "dividendos_6a_media": div6a,
             "pl_absoluto": pl,
@@ -526,17 +525,6 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         ]:
             pj = rec_dict.get(campo)
             rec_dict[f"{metodo}_upside"] = sd((pj / p - 1) * 100 if (pj and p) else None, 1)
-
-        # Lynch
-        cagr_luc = safe_float(t("cagr_lucro_5a"))
-        if cagr_luc and 0 < cagr_luc <= 0.50 and lpa:
-            rec_dict["preco_justo_lynch"] = safe_float(lpa * (cagr_luc * 100))
-            
-        rec_dict["lynch_upside"] = sd(
-            ((rec_dict["preco_justo_lynch"] / p - 1) * 100
-             if rec_dict["preco_justo_lynch"] and p else None),
-            1
-        )
 
         # AGF
         pt = rec_dict.get("preco_teto_medio")
