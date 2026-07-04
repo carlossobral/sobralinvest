@@ -503,14 +503,14 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "ebit": ebit,
             "lpa": lpa,
             "vpa": vpa,
-            "preco_justo_graham": safe_float(
+            "graham": safe_float(
                 math.sqrt(max(0, 22.5 * (lpa or 0) * (vpa or 0))) if (lpa and lpa > 0 and vpa and vpa > 0) else None
             ),
-            "preco_justo_graham_br": safe_float(
+            "graham_br": safe_float(
                 math.sqrt(max(0, 15 * (lpa or 0) * (vpa or 0))) if (lpa and lpa > 0 and vpa and vpa > 0) else None
             ),
-            "preco_justo_bazin": (div12m / 0.06) if div12m > 0 else None,
-            "preco_teto_medio": (div6a / 0.06) if div6a > 0 else None,
+            "bazin": (div12m / 0.06) if div12m > 0 else None,
+            "agf": (div6a / 0.06) if div6a > 0 else None,
             "dividendos_12m": div12m,
             "dividendos_6a_media": div6a,
             "pl_absoluto": pl,
@@ -519,15 +519,15 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
 
         # Graham upside
         for metodo, campo in [
-            ("graham", "preco_justo_graham"),
-            ("graham_br", "preco_justo_graham_br"),
-            ("bazin", "preco_justo_bazin"),
+            ("graham", "graham"),
+            ("graham_br", "graham_br"),
+            ("bazin", "bazin"),
         ]:
             pj = rec_dict.get(campo)
             rec_dict[f"{metodo}_upside"] = sd((pj / p - 1) * 100 if (pj and p) else None, 1)
 
         # AGF
-        pt = rec_dict.get("preco_teto_medio")
+        pt = rec_dict.get("agf")
         rec_dict["agf_upside"] = sd(((pt / p - 1) * 100) if (pt and p) else None, 1)
 
         registros_saida.append(limpar_registro(rec_dict))
