@@ -486,12 +486,19 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
             df_final['ebitda'] = df_final['ebit'] + da
 
+        # CORREÇÃO: Criar coluna depreciacao_amortizacao_ytd (YTD = acumulado no ano)
+        if 'depreciacao_amortizacao' in df_final.columns:
+            df_final['depreciacao_amortizacao_ytd'] = df_final['depreciacao_amortizacao']
+
         # 2. Escala: MILHARES -> REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
 
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
+
+        if 'depreciacao_amortizacao_ytd' in df_final.columns:
+            df_final['depreciacao_amortizacao_ytd'] = pd.to_numeric(df_final['depreciacao_amortizacao_ytd'], errors='coerce') * 1000
 
         # 3. Caixa com fallback DFC
         if 'caixa_dfc' in df_final.columns:
@@ -554,7 +561,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             ['ticker', 'ano', 'trimestre', 'data_referencia']
             + [f'{c}_ytd' for c in COLUNAS_DRE if f'{c}_ytd' in df_final.columns]
             + [c for c in COLUNAS_BAL if c in df_final.columns]
-            + ['depreciacao_amortizacao']
+            + ['depreciacao_amortizacao', 'depreciacao_amortizacao_ytd']
             + ['quantidade_acoes']
         )
 
@@ -577,7 +584,10 @@ def calcular_colunas_q(df):
     print("Calculando colunas _q...")
     df = df.sort_values(['ticker', 'ano', 'data_referencia']).reset_index(drop=True)
 
-    for col_base in COLUNAS_DRE:
+    # CORREÇÃO: Adicionar 'depreciacao_amortizacao' na lista de colunas para desacumular
+    colunas_para_desacumular = COLUNAS_DRE + ['depreciacao_amortizacao']
+    
+    for col_base in colunas_para_desacumular:
         col_ytd = f'{col_base}_ytd'
         col_q = f'{col_base}_q'
         if col_ytd not in df.columns:
