@@ -489,13 +489,12 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         # CORREÇÃO: Criar coluna depreciacao_amortizacao_ytd (YTD = acumulado no ano)
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao_ytd'] = df_final['depreciacao_amortizacao']
+            # Remover a coluna base (sem sufixo) pois não existe mais no banco
+            df_final = df_final.drop(columns=['depreciacao_amortizacao'])
 
         # 2. Escala: MILHARES -> REAIS
         for col in [c for c in COLUNAS_DRE + COLUNAS_BAL if c in df_final.columns]:
             df_final[col] = pd.to_numeric(df_final[col], errors='coerce') * 1000
-
-        if 'depreciacao_amortizacao' in df_final.columns:
-            df_final['depreciacao_amortizacao'] = pd.to_numeric(df_final['depreciacao_amortizacao'], errors='coerce') * 1000
 
         if 'depreciacao_amortizacao_ytd' in df_final.columns:
             df_final['depreciacao_amortizacao_ytd'] = pd.to_numeric(df_final['depreciacao_amortizacao_ytd'], errors='coerce') * 1000
@@ -561,7 +560,7 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             ['ticker', 'ano', 'trimestre', 'data_referencia']
             + [f'{c}_ytd' for c in COLUNAS_DRE if f'{c}_ytd' in df_final.columns]
             + [c for c in COLUNAS_BAL if c in df_final.columns]
-            + ['depreciacao_amortizacao', 'depreciacao_amortizacao_ytd']
+            + ['depreciacao_amortizacao_ytd']
             + ['quantidade_acoes']
         )
 
