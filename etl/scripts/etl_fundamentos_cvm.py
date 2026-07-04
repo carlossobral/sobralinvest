@@ -23,7 +23,6 @@ MAPEAMENTO_BPA = {
 
 MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
-    'passivo_total':      r'^2$',
 }
 
 COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
@@ -514,7 +513,14 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
         cxa = df_final.get('caixa', pd.Series(0, index=df_final.index)).fillna(0)
         df_final['divida_liquida'] = div - cxa
         
-        # ==========================================================
+        # 5. Passivo Total
+        if (
+            'ativo_total' in df_final.columns and
+            'patrimonio_liquido' in df_final.columns
+        ):
+            df_final['passivo_total'] = (
+                df_final['ativo_total'] - df_final['patrimonio_liquido']
+            )
 
         # Mapear ticker
         df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
