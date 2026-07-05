@@ -37,28 +37,15 @@ df = df[
 ].copy()
 
 # ==========================================================
-# NORMALIZA CNPJ
+# NORMALIZA DATA DE REGISTRO
 # ==========================================================
 
-df["cnpj"] = (
-    df["CNPJ_CIA"]
-    .str.replace(".", "", regex=False)
-    .str.replace("/", "", regex=False)
-    .str.replace("-", "", regex=False)
-    .str.zfill(14)
-)
+df["cd_cvm"] = df["CD_CVM"].astype(str).str.strip()
 
-# CORREÇÃO: Especificar formato correto (YYYY-MM-DD)
 df["data_registro_cvm"] = pd.to_datetime(
     df["DT_REG"],
     format="%Y-%m-%d",
     errors="coerce"
-)
-
-hoje = datetime.today()
-
-df["anos_listagem"] = (
-    (hoje - df["data_registro_cvm"]).dt.days // 365
 )
 
 # ==========================================================
@@ -70,25 +57,24 @@ print("Carregando empresas...")
 empresas = (
     supabase
     .table("empresas")
-    .select("id,cnpj")
+    .select("id,cd_cvm")
     .execute()
 )
 
 empresas_df = pd.DataFrame(empresas.data)
 
-empresas_df["cnpj"] = empresas_df["cnpj"].astype(str).str.zfill(14)
+empresas_df["cd_cvm"] = empresas_df["cd_cvm"].astype(str).str.strip()
 
 # ==========================================================
-# MERGE
+# MERGE POR CD_CVM
 # ==========================================================
 
 merge = empresas_df.merge(
     df[[
-        "cnpj",
-        "data_registro_cvm",
-        "anos_listagem"
+        "cd_cvm",
+        "data_registro_cvm"
     ]],
-    on="cnpj",
+    on="cd_cvm",
     how="left"
 )
 
@@ -106,10 +92,7 @@ for _, row in merge.iterrows():
         continue
 
     supabase.table("empresas").update({
-
-        "data_registro_cvm": row["data_registro_cvm"].strftime("%Y-%m-%d"),
-        "anos_listagem": int(row["anos_listagem"])
-
+        "data_registro_cvm": row["data_registro_cvm"].strftime("%Y-%m-%d")
     }).eq("id", row["id"]).execute()
 
     total += 1
