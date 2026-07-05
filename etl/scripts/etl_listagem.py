@@ -13,16 +13,11 @@ from datetime import datetime
 import pandas as pd
 import requests
 from io import BytesIO
-from supabase import create_client
+from etl.database.supabase_client import supabase
 
 # ==========================================================
 # CONFIGURAÇÃO
 # ==========================================================
-
-SUPABASE_URL = ""
-SUPABASE_KEY = ""
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 URL_CVM = "https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv"
 
