@@ -1,14 +1,3 @@
-"""
-etl_listagem.py
-
-Atualiza:
-- data_registro_cvm
-- anos_listagem
-
-Origem:
-https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv
-"""
-
 from datetime import datetime
 import pandas as pd
 import requests
@@ -59,9 +48,10 @@ df["cnpj"] = (
     .str.zfill(14)
 )
 
+# CORREÇÃO: Especificar formato correto (YYYY-MM-DD)
 df["data_registro_cvm"] = pd.to_datetime(
     df["DT_REG"],
-    dayfirst=True,
+    format="%Y-%m-%d",
     errors="coerce"
 )
 
