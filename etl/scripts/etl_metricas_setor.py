@@ -1,7 +1,7 @@
 """
 ETL - Métricas Setoriais
 
-Calcula as medianas por setor utilizadas pelo CS Score.
+Calcula as medianas dos indicadores por setor.
 
 Origem:
 - empresas
@@ -18,7 +18,7 @@ import pandas as pd
 from etl.database.supabase_client import supabase
 
 # ==========================================================
-# CARREGA EMPRESAS
+# EMPRESAS
 # ==========================================================
 
 print("Carregando empresas...")
@@ -33,7 +33,7 @@ empresas = (
 empresas_df = pd.DataFrame(empresas.data)
 
 # ==========================================================
-# CARREGA INDICADORES
+# INDICADORES
 # ==========================================================
 
 print("Carregando indicadores...")
@@ -41,18 +41,16 @@ print("Carregando indicadores...")
 indicadores = (
     supabase
     .table("indicadores")
-    .select(
-        """
+    .select("""
         ticker,
-        pl,
-        pvp,
+        p_l,
+        p_vp,
         ev_ebit,
         roe,
         roic,
         dy_atual,
         div_liq_ebitda
-        """
-    )
+    """)
     .execute()
 )
 
@@ -62,8 +60,8 @@ indicadores_df = pd.DataFrame(indicadores.data)
 # MERGE
 # ==========================================================
 
-df = indicadores_df.merge(
-    empresas_df,
+df = empresas_df.merge(
+    indicadores_df,
     on="ticker",
     how="inner"
 )
@@ -71,24 +69,26 @@ df = indicadores_df.merge(
 print(f"{len(df)} empresas carregadas.")
 
 # ==========================================================
-# CONVERTE PARA NUMÉRICO
+# CONVERSÃO NUMÉRICA
 # ==========================================================
 
 colunas = [
-    "pl",
-    "pvp",
+
+    "p_l",
+    "p_vp",
     "ev_ebit",
     "roe",
     "roic",
     "dy_atual",
     "div_liq_ebitda"
+
 ]
 
 for coluna in colunas:
     df[coluna] = pd.to_numeric(df[coluna], errors="coerce")
 
 # ==========================================================
-# FUNÇÃO MEDIANA
+# FUNÇÕES
 # ==========================================================
 
 def mediana_positiva(serie):
@@ -96,16 +96,17 @@ def mediana_positiva(serie):
     serie = serie.dropna()
     serie = serie[serie > 0]
 
-    if len(serie) == 0:
+    if serie.empty:
         return None
 
-    return float(serie.median())
+    return round(float(serie.median()), 4)
+
 
 # ==========================================================
-# CALCULA MÉTRICAS POR SETOR
+# CÁLCULO
 # ==========================================================
 
-print("Calculando métricas...")
+print("Calculando métricas por setor...")
 
 resultado = []
 
@@ -116,10 +117,10 @@ for setor, grupo in df.groupby("setor"):
         "setor": setor,
 
         "pl_mediano":
-            mediana_positiva(grupo["pl"]),
+            mediana_positiva(grupo["p_l"]),
 
         "pvp_mediano":
-            mediana_positiva(grupo["pvp"]),
+            mediana_positiva(grupo["p_vp"]),
 
         "ev_ebit_mediano":
             mediana_positiva(grupo["ev_ebit"]),
@@ -137,7 +138,7 @@ for setor, grupo in df.groupby("setor"):
             mediana_positiva(grupo["div_liq_ebitda"]),
 
         "empresas_setor":
-            int(len(grupo)),
+            len(grupo),
 
         "data_atualizacao":
             date.today().isoformat()
@@ -156,13 +157,11 @@ print(metricas_df)
 
 print("Atualizando metricas_score...")
 
-dados = metricas_df.to_dict(orient="records")
-
 (
     supabase
     .table("metricas_score")
     .upsert(
-        dados,
+        metricas_df.to_dict(orient="records"),
         on_conflict="setor"
     )
     .execute()
