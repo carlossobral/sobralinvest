@@ -1,6 +1,3 @@
-Aqui está o arquivo completo e corrigido, implementando exatamente as suas ajustes: a nova regra de diferenciação para Bancos/Seguradoras, a remoção do `anos_listagem` e o limite de segurança para empresas normais.
-
-```python
 """
 ETL - Score CS 2.0
 
@@ -395,4 +392,3 @@ for reg in registros_update:
         print(f"  Erro ao atualizar {reg['ticker']}: {e}")
 
 print(f"✅ Score CS atualizado com sucesso. {salvos} salvos, {erros} erros.")
-```
