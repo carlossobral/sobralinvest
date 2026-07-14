@@ -1,3 +1,6 @@
+Aqui está o arquivo completo e corrigido, implementando exatamente as suas ajustes: a nova regra de diferenciação para Bancos/Seguradoras, a remoção do `anos_listagem` e o limite de segurança para empresas normais.
+
+```python
 """
 ETL - Score CS 2.0
 
@@ -13,7 +16,7 @@ from datetime import datetime
 from etl.database.supabase_client import supabase
 
 # ==========================================================
-# 1. IMPORTS (Adicionais)
+# 1. IMPORTS
 # ==========================================================
 
 # ==========================================================
@@ -43,7 +46,7 @@ offset = 0
 while True:
     chunk = (
         supabase.table("empresas")
-        .select("ticker, setor, segmento, anos_listagem")
+        .select("ticker, setor, segmento") # Removido anos_listagem conforme definido
         .range(offset, offset + 999)
         .execute()
         .data
@@ -115,14 +118,13 @@ print(f"{len(dividendos_df)} eventos de dividendos carregados.")
 # ==========================================================
 print("Calculando histórico do ROE (5 anos)...")
 
-# Buscar todos os indicadores anuais para ter o histórico
 hist_roe_resp = []
 offset = 0
 while True:
     chunk = (
         supabase.table("indicadores")
         .select("ticker, ano, roe")
-        .neq("roe", 0) # Otimização: não precisa trazer ROE 0
+        .neq("roe", 0)
         .range(offset, offset + 999)
         .execute()
         .data
@@ -134,11 +136,9 @@ while True:
 
 hist_roe_df = pd.DataFrame(hist_roe_resp)
 
-# Pegar os últimos 5 anos distintos
 anos_disponiveis = sorted(hist_roe_df['ano'].unique(), reverse=True)[:5]
 hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
 
-# Contar quantos anos o ROE foi >= 10% por ticker
 hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 10
 consistencia_roe = hist_roe_df.groupby('ticker')['roe_10'].sum().reset_index()
 consistencia_roe.columns = ['ticker', 'anos_roe_10']
@@ -155,14 +155,11 @@ if not dividendos_df.empty:
     dividendos_df['valor'] = pd.to_numeric(dividendos_df['valor'], errors='coerce').fillna(0)
     dividendos_df['ano'] = dividendos_df['data_pagamento'].dt.year
     
-    # Últimos 6 anos
     ano_limite = datetime.now().year - 5
     div_6a = dividendos_df[dividendos_df['ano'] >= ano_limite]
     
-    # Agrupar por ticker e ano, somar valor
     div_anual = div_6a.groupby(['ticker', 'ano'])['valor'].sum().reset_index()
     
-    # Contar quantos anos pagou > 0
     div_anual['pagou'] = div_anual['valor'] > 0
     hist_div = div_anual.groupby('ticker')['pagou'].sum().reset_index()
     hist_div.columns = ['ticker', 'anos_div_pagos']
@@ -181,16 +178,16 @@ df = df.merge(metricas_df, on="setor", how="left")
 df = df.merge(consistencia_roe, on="ticker", how="left")
 df = df.merge(hist_div, on="ticker", how="left")
 
-# Preencher NaNs históricos com 0
 df['anos_roe_10'] = df['anos_roe_10'].fillna(0).astype(int)
 df['anos_div_pagos'] = df['anos_div_pagos'].fillna(0).astype(int)
 
 print(f"{len(df)} empresas prontas para cálculo.")
 
 # ==========================================================
-# 10. FUNÇÕES SCORE (RIGOROSAMENTE CONFORME REGRA)
+# 10. FUNÇÕES SCORE
 # ==========================================================
 
+# --- RENTABILIDADE ---
 def score_roe(val):
     if pd.isna(val): return 0
     if val >= 25: return 10
@@ -222,6 +219,7 @@ def score_consistencia_roe(anos):
     if anos == 3: return 1
     return 0
 
+# --- CRESCIMENTO ---
 def score_cagr_receita(val):
     if pd.isna(val): return 0
     if val >= 20: return 12
@@ -229,7 +227,7 @@ def score_cagr_receita(val):
     if val >= 10: return 7
     if val >= 5: return 4
     if val >= 0: return 2
-    return 0 # Negativo
+    return 0
 
 def score_cagr_lucro(val):
     if pd.isna(val): return 0
@@ -238,8 +236,9 @@ def score_cagr_lucro(val):
     if val >= 10: return 7
     if val >= 5: return 4
     if val >= 0: return 2
-    return 0 # Negativo ou prejuízo início
+    return 0
 
+# --- SEGURANÇA (EMPRESAS NORMAIS) ---
 def score_divida(val):
     if pd.isna(val): return 0
     if val <= 0: return 15
@@ -258,6 +257,23 @@ def score_liquidez(val):
     if val >= 0.5: return 1
     return 0
 
+# --- SEGURANÇA (BANCOS/SEGURADORAS) ---
+def score_roe_banco(val):
+    if pd.isna(val): return 0
+    if val >= 25: return 10
+    if val >= 20: return 8
+    if val >= 15: return 6
+    if val >= 10: return 4
+    return 0
+
+def score_liquidez_banco(val):
+    if pd.isna(val): return 0
+    if val >= 2.0: return 10
+    if val >= 1.5: return 8
+    if val >= 1.0: return 5
+    return 0
+
+# --- DIVIDENDOS ---
 def score_hist_div(anos):
     if anos >= 6: return 8
     if anos == 5: return 6
@@ -282,6 +298,7 @@ def score_dy_medio(val):
     if val >= 2: return 1
     return 0
 
+# --- VALUATION ---
 def score_pl_rel(val, med):
     if pd.isna(val) or val <= 0 or pd.isna(med) or med <= 0: return 0
     return 3 if val < med else 0
@@ -310,26 +327,33 @@ for _, row in df.iterrows():
     is_banco = eh_financeiro(row.get("segmento"))
     
     # 1. RENTABILIDADE (25)
-    pts_roe = score_roe(row["roe"])
-    pts_roic = score_roic(row["roic"])
-    pts_margem = score_margem(row["margem_liquida"])
-    pts_cons_roe = score_consistencia_roe(row["anos_roe_10"])
-    
-    rentabilidade = pts_roe + pts_roic + pts_margem + pts_cons_roe
+    rentabilidade = (
+        score_roe(row["roe"]) +
+        score_roic(row["roic"]) +
+        score_margem(row["margem_liquida"]) +
+        score_consistencia_roe(row["anos_roe_10"])
+    )
     
     # 2. CRESCIMENTO (25)
-    crescimento = score_cagr_receita(row["cagr_receita_5a"]) + score_cagr_lucro(row["cagr_lucro_5a"])
+    crescimento = (
+        score_cagr_receita(row["cagr_receita_5a"]) + 
+        score_cagr_lucro(row["cagr_lucro_5a"])
+    )
     
-    # 3. SEGURANÇA (20) - Lógica para Bancos
+    # 3. SEGURANÇA (20)
     if is_banco:
-        # Bancos: ROE (+8), Liq (+7). Máximo do pilar = 20
-        seguranca = score_roe(row["roe"]) + 8 + score_liquidez(row["liquidez_corrente"]) + 7
-        seguranca = min(20, seguranca) # Cap em 20 pontos
+        seguranca = score_roe_banco(row["roe"]) + score_liquidez_banco(row["liquidez_corrente"])
     else:
         seguranca = score_divida(row["div_liq_ebitda"]) + score_liquidez(row["liquidez_corrente"])
+    
+    seguranca = min(20, seguranca) # Limita o máximo do pilar a 20 pontos
         
     # 4. DIVIDENDOS (20)
-    dividendos = score_hist_div(row["anos_div_pagos"]) + score_dy_atual(row["dy_atual"]) + score_dy_medio(row["dividendos_6a_media"])
+    dividendos = (
+        score_hist_div(row["anos_div_pagos"]) + 
+        score_dy_atual(row["dy_atual"]) + 
+        score_dy_medio(row["dividendos_6a_media"])
+    )
     
     # 5. VALUATION (10)
     valuation = (
@@ -356,25 +380,19 @@ resultado_df = pd.DataFrame(resultados)
 # ==========================================================
 print(f"Atualizando Score CS para {len(resultado_df)} empresas...")
 
-# Atualização em lote (Batch) para não sobrecarregar API
 registros_update = resultado_df.to_dict(orient="records")
-lote = 100
 erros = 0
 salvos = 0
 
-for i in range(0, len(registros_update), lote):
-    lote_atual = registros_update[i: i + lote]
+for reg in registros_update:
     try:
-        # Supabase não suporta update em lote direto via SDK Python nativo para PKs diferentes,
-        # mas o upsert com on_conflict resolve isso atualizando a linha existente.
-        # Para garantir que só atualizamos o dia corrente, construímos o payload.
-        for reg in lote_atual:
-            supabase.table("indicadores").update({
-                "score_cs": reg["score_cs"]
-            }).eq("ticker", reg["ticker"]).eq("data_calculo", data_calculo).execute()
-            salvos += 1
+        supabase.table("indicadores").update({
+            "score_cs": reg["score_cs"]
+        }).eq("ticker", reg["ticker"]).eq("data_calculo", data_calculo).execute()
+        salvos += 1
     except Exception as e:
         erros += 1
-        print(f"  Erro no lote {i}: {e}")
+        print(f"  Erro ao atualizar {reg['ticker']}: {e}")
 
 print(f"✅ Score CS atualizado com sucesso. {salvos} salvos, {erros} erros.")
+```
