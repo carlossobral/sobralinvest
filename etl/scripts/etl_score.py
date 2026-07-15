@@ -43,7 +43,7 @@ offset = 0
 while True:
     chunk = (
         supabase.table("empresas")
-        .select("ticker, setor, segmento") # Removido anos_listagem conforme definido
+        .select("ticker, setor, segmento, anos_listagem")
         .range(offset, offset + 999)
         .execute()
         .data
@@ -113,7 +113,7 @@ print(f"{len(dividendos_df)} eventos de dividendos carregados.")
 # ==========================================================
 # 7. CALCULAR HISTÓRICO ROE (VETORIZADO)
 # ==========================================================
-print("Calculando histórico do ROE (5 anos)...")
+print("Calculando histórico do ROE (5 anos completos)...")
 
 hist_roe_resp = []
 offset = 0
@@ -121,7 +121,6 @@ while True:
     chunk = (
         supabase.table("indicadores")
         .select("ticker, ano, roe")
-        .neq("roe", 0)
         .range(offset, offset + 999)
         .execute()
         .data
@@ -133,9 +132,14 @@ while True:
 
 hist_roe_df = pd.DataFrame(hist_roe_resp)
 
-anos_disponiveis = sorted(hist_roe_df['ano'].unique(), reverse=True)[:5]
-hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
+# Regra: Excluir ano parcial (corrente) e pegar 5 anos completos
+ano_max = hist_roe_df["ano"].max()
+anos_disponiveis = [
+    a for a in sorted(hist_roe_df["ano"].unique(), reverse=True)
+    if a < ano_max
+][:5]
 
+hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
 hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 10
 consistencia_roe = hist_roe_df.groupby('ticker')['roe_10'].sum().reset_index()
 consistencia_roe.columns = ['ticker', 'anos_roe_10']
@@ -145,18 +149,23 @@ print("Histórico ROE processado.")
 # ==========================================================
 # 8. CALCULAR HISTÓRICO DIVIDENDOS (VETORIZADO)
 # ==========================================================
-print("Calculando histórico de dividendos (6 anos)...")
+print("Calculando histórico de dividendos (6 anos completos)...")
 
 if not dividendos_df.empty:
     dividendos_df['data_pagamento'] = pd.to_datetime(dividendos_df['data_pagamento'])
     dividendos_df['valor'] = pd.to_numeric(dividendos_df['valor'], errors='coerce').fillna(0)
     dividendos_df['ano'] = dividendos_df['data_pagamento'].dt.year
     
-    ano_limite = datetime.now().year - 5
-    div_6a = dividendos_df[dividendos_df['ano'] >= ano_limite]
+    # Regra: Garantir 6 anos COMPLETOS, excluindo o ano parcial corrente
+    ano_atual = datetime.now().year
+    ano_limite = ano_atual - 6
+    
+    div_6a = dividendos_df[
+        (dividendos_df["ano"] >= ano_limite) & 
+        (dividendos_df["ano"] < ano_atual)
+    ]
     
     div_anual = div_6a.groupby(['ticker', 'ano'])['valor'].sum().reset_index()
-    
     div_anual['pagou'] = div_anual['valor'] > 0
     hist_div = div_anual.groupby('ticker')['pagou'].sum().reset_index()
     hist_div.columns = ['ticker', 'anos_div_pagos']
@@ -184,7 +193,7 @@ print(f"{len(df)} empresas prontas para cálculo.")
 # 10. FUNÇÕES SCORE
 # ==========================================================
 
-# --- RENTABILIDADE ---
+# --- RENTABILIDADE (25) ---
 def score_roe(val):
     if pd.isna(val): return 0
     if val >= 25: return 10
@@ -216,7 +225,7 @@ def score_consistencia_roe(anos):
     if anos == 3: return 1
     return 0
 
-# --- CRESCIMENTO ---
+# --- CRESCIMENTO (25) ---
 def score_cagr_receita(val):
     if pd.isna(val): return 0
     if val >= 20: return 12
@@ -235,7 +244,7 @@ def score_cagr_lucro(val):
     if val >= 0: return 2
     return 0
 
-# --- SEGURANÇA (EMPRESAS NORMAIS) ---
+# --- SEGURANÇA (20 - Apenas Normais) ---
 def score_divida(val):
     if pd.isna(val): return 0
     if val <= 0: return 15
@@ -254,23 +263,7 @@ def score_liquidez(val):
     if val >= 0.5: return 1
     return 0
 
-# --- SEGURANÇA (BANCOS/SEGURADORAS) ---
-def score_roe_banco(val):
-    if pd.isna(val): return 0
-    if val >= 25: return 10
-    if val >= 20: return 8
-    if val >= 15: return 6
-    if val >= 10: return 4
-    return 0
-
-def score_liquidez_banco(val):
-    if pd.isna(val): return 0
-    if val >= 2.0: return 10
-    if val >= 1.5: return 8
-    if val >= 1.0: return 5
-    return 0
-
-# --- DIVIDENDOS ---
+# --- DIVIDENDOS (20) ---
 def score_hist_div(anos):
     if anos >= 6: return 8
     if anos == 5: return 6
@@ -295,7 +288,7 @@ def score_dy_medio(val):
     if val >= 2: return 1
     return 0
 
-# --- VALUATION ---
+# --- VALUATION (10 + Bônus) ---
 def score_pl_rel(val, med):
     if pd.isna(val) or val <= 0 or pd.isna(med) or med <= 0: return 0
     return 3 if val < med else 0
@@ -308,10 +301,30 @@ def score_ev_ebit_rel(val, med):
     if pd.isna(val) or val <= 0 or pd.isna(med) or med <= 0: return 0
     return 2 if val < med else 0
 
-def eh_financeiro(segmento):
-    if pd.isna(segmento): return False
-    seg_up = segmento.upper()
-    return any(p in seg_up for p in ["BANCO", "BANCOS", "INTERMEDIÁR", "SEGURADORA", "SEGUROS"])
+# --- DETECÇÃO BANCOS E SEGURADORAS (REGRA FINAL) ---
+def eh_financeiro(segmento, ticker):
+    if pd.isna(segmento): 
+        return False
+    
+    seg = str(segmento).strip()
+    tk = str(ticker).strip().upper()
+    
+    # Regra Banco: É banco, mas não é a Itaúsa (Holdings)
+    is_banco = seg == "Bancos" and tk not in ['ITSA3', 'ITSA4']
+    
+    # Regra Seguradora: É seguradora OU está na lista de tickers específicos
+    is_seguradora = seg == "Seguradoras" or tk in ['WIZC3', 'CXSE3', 'BBSE3']
+    
+    return is_banco or is_seguradora
+
+# --- BÔNUS LISTAGEM ---
+def bonus_listagem(anos):
+    if pd.isna(anos):
+        return 0
+    try:
+        return 1 if float(anos) >= 5 else 0
+    except (ValueError, TypeError):
+        return 0
 
 # ==========================================================
 # 11. CALCULAR SCORE
@@ -321,9 +334,9 @@ print("Calculando Score CS...")
 resultados = []
 
 for _, row in df.iterrows():
-    is_banco = eh_financeiro(row.get("segmento"))
+    is_banco = eh_financeiro(row.get("segmento"), row.get("ticker"))
     
-    # 1. RENTABILIDADE (25)
+    # 1. RENTABILIDADE (25 base)
     rentabilidade = (
         score_roe(row["roe"]) +
         score_roic(row["roic"]) +
@@ -331,28 +344,26 @@ for _, row in df.iterrows():
         score_consistencia_roe(row["anos_roe_10"])
     )
     
-    # 2. CRESCIMENTO (25)
+    # 2. CRESCIMENTO (25 base)
     crescimento = (
         score_cagr_receita(row["cagr_receita_5a"]) + 
         score_cagr_lucro(row["cagr_lucro_5a"])
     )
     
-    # 3. SEGURANÇA (20)
+    # 3. SEGURANÇA (20 base / 0 para financeiros)
     if is_banco:
-        seguranca = score_roe_banco(row["roe"]) + score_liquidez_banco(row["liquidez_corrente"])
+        seguranca = 0
     else:
         seguranca = score_divida(row["div_liq_ebitda"]) + score_liquidez(row["liquidez_corrente"])
-    
-    seguranca = min(20, seguranca) # Limita o máximo do pilar a 20 pontos
         
-    # 4. DIVIDENDOS (20)
+    # 4. DIVIDENDOS (20 base)
     dividendos = (
         score_hist_div(row["anos_div_pagos"]) + 
         score_dy_atual(row["dy_atual"]) + 
         score_dy_medio(row["dividendos_6a_media"])
     )
     
-    # 5. VALUATION (10)
+    # 5. VALUATION (10 base + Bônus ROE/ROIC)
     valuation = (
         score_pl_rel(row["p_l"], row.get("pl_mediano")) +
         score_pvp_rel(row["p_vp"], row.get("pvp_mediano")) +
@@ -361,13 +372,29 @@ for _, row in df.iterrows():
         (1 if not pd.isna(row["roic"]) and not pd.isna(row.get("roic_mediano")) and row["roic"] > row.get("roic_mediano") else 0)
     )
     
-    # TOTAL
-    score_cs = rentabilidade + crescimento + seguranca + dividendos + valuation
-    score_cs = min(100, max(0, score_cs)) # Garantir faixa 0-100
+    # REDISTRIBUIÇÃO DOS PESOS (Apenas Financeiros)
+    if is_banco:
+        rentabilidade = round(rentabilidade * (31 / 25), 2)
+        crescimento = round(crescimento * (31 / 25), 2)
+        dividendos = round(dividendos * (25 / 20), 2)
+        valuation = round(valuation * (13 / 10), 2)
+    
+    # TOTAL (+ Bônus Listagem)
+    score_cs = (
+        rentabilidade
+        + crescimento
+        + seguranca
+        + dividendos
+        + valuation
+        + bonus_listagem(row.get("anos_listagem"))
+    )
+    
+    # Limite máximo 103
+    score_cs = min(103, max(0, score_cs))
     
     resultados.append({
         "ticker": row["ticker"],
-        "score_cs": int(score_cs)
+        "score_cs": round(score_cs, 2)
     })
 
 resultado_df = pd.DataFrame(resultados)
