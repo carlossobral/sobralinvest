@@ -6,7 +6,7 @@ from zipfile import ZipFile
 from etl.database.supabase_client import supabase
 
 URL_MFINANCE = "https://mfinance.com.br/api/v1/stocks"
-URL_FRE_CVM = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FRE/DADOS/fre_cia_aberta.zip"
+URL_FRE_CVM_BASE = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FRE/DADOS/fre_cia_aberta_{ano}.zip"
 
 def registrar_carga(status: str, registros: int, mensagem: str):
     supabase.table("etl_cargas").insert({
@@ -19,61 +19,80 @@ def registrar_carga(status: str, registros: int, mensagem: str):
 
 def buscar_fre_cvm():
     print("Baixando FRE da CVM...")
-    try:
-        r = httpx.get(URL_FRE_CVM, timeout=180, follow_redirects=True)
-        r.raise_for_status()
-    except Exception as e:
-        print(f"  Erro ao baixar FRE: {e}")
-        return pd.DataFrame()
-
-    dfs = []
-    with ZipFile(BytesIO(r.content)) as z:
-        # Procura todos os CSVs de valor mobiliário dentro do ZIP (ignora pastas)
-        files = [n for n in z.namelist() if 'valor_mobiliario' in n.lower() and n.endswith('.csv')]
-        
-        if not files:
-            print("  Nenhum arquivo de valor mobiliário encontrado no FRE.")
-            return pd.DataFrame()
-
-        print(f"  Encontrados {len(files)} arquivos de valor mobiliário.")
-        
-        for f in files:
-            df = pd.read_csv(z.open(f), sep=';', encoding='latin1', low_memory=False)
-            dfs.append(df)
+    ano_atual = datetime.now().year
+    anos_para_tentar = [ano_atual, ano_atual - 1] # Tenta o atual, depois o anterior
+    
+    df_final = pd.DataFrame()
+    
+    for ano in anos_para_tentar:
+        url = URL_FRE_CVM_BASE.format(ano=ano)
+        print(f"  Tentando baixar: {url}")
+        try:
+            r = httpx.get(url, timeout=180, follow_redirects=True)
+            r.raise_for_status()
+            print(f"  Sucesso no download do ano {ano}.")
             
-    if not dfs:
+            dfs = []
+            with ZipFile(BytesIO(r.content)) as z:
+                # Procura todos os CSVs de valor mobiliário dentro do ZIP
+                files = [n for n in z.namelist() if 'valor_mobiliario' in n.lower() and n.endswith('.csv')]
+                
+                if not files:
+                    print("  Nenhum arquivo de valor mobiliário encontrado no FRE.")
+                    continue
+
+                print(f"  Encontrados {len(files)} arquivos de valor mobiliário.")
+                
+                for f in files:
+                    df = pd.read_csv(z.open(f), sep=';', encoding='latin1', low_memory=False)
+                    dfs.append(df)
+                    
+            if not dfs:
+                continue
+            
+            df_final = pd.concat(dfs, ignore_index=True)
+            break # Se baixou com sucesso, não tenta o ano anterior
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                print(f"  Arquivo do ano {ano} não disponível (404). Tentando ano anterior...")
+            else:
+                print(f"  Erro HTTP ao baixar FRE {ano}: {e}")
+        except Exception as e:
+            print(f"  Erro inesperado ao baixar FRE {ano}: {e}")
+
+    if df_final.empty:
+        print("  Não foi possível obter dados do FRE.")
         return pd.DataFrame()
-    
-    df = pd.concat(dfs, ignore_index=True)
-    
+
     # Seleciona colunas relevantes
     cols = ['CNPJ_Companhia', 'Codigo_CVM', 'Data_Referencia', 'Ticker', 'Quantidade_Total_Acoes', 'Percentual_Livre_Circulacao']
-    df = df[cols].copy()
+    df_final = df_final[cols].copy()
     
     # Limpeza
-    df['Ticker'] = df['Ticker'].astype(str).str.strip()
-    df['Quantidade_Total_Acoes'] = pd.to_numeric(df['Quantidade_Total_Acoes'], errors='coerce')
-    df['Percentual_Livre_Circulacao'] = pd.to_numeric(df['Percentual_Livre_Circulacao'], errors='coerce')
-    df['Data_Referencia'] = pd.to_datetime(df['Data_Referencia'])
+    df_final['Ticker'] = df_final['Ticker'].astype(str).str.strip()
+    df_final['Quantidade_Total_Acoes'] = pd.to_numeric(df_final['Quantidade_Total_Acoes'], errors='coerce')
+    df_final['Percentual_Livre_Circulacao'] = pd.to_numeric(df_final['Percentual_Livre_Circulacao'], errors='coerce')
+    df_final['Data_Referencia'] = pd.to_datetime(df_final['Data_Referencia'])
     
     # Ordena por data para pegar o mais recente
-    df = df.sort_values('Data_Referencia', ascending=False)
+    df_final = df_final.sort_values('Data_Referencia', ascending=False)
     
     # Remove duplicatas mantendo o mais recente
-    df = df.drop_duplicates(subset=['Ticker'], keep='first')
+    df_final = df_final.drop_duplicates(subset=['Ticker'], keep='first')
     
     # Calcula qtd_acoes_circulacao
-    df['qtd_acoes_circulacao'] = (df['Quantidade_Total_Acoes'] * df['Percentual_Livre_Circulacao'] / 100).fillna(0).astype('Int64')
+    df_final['qtd_acoes_circulacao'] = (df_final['Quantidade_Total_Acoes'] * df_final['Percentual_Livre_Circulacao'] / 100).fillna(0).astype('Int64')
     
-    df = df.rename(columns={
+    df_final = df_final.rename(columns={
         'CNPJ_Companhia': 'cnpj',
         'Codigo_CVM': 'cd_cvm',
         'Quantidade_Total_Acoes': 'qtd_acoes_totais',
         'Percentual_Livre_Circulacao': 'pct_free_float'
     })
     
-    print(f"  {len(df)} tickers encontrados no FRE.")
-    return df[['Ticker', 'cnpj', 'cd_cvm', 'qtd_acoes_totais', 'qtd_acoes_circulacao', 'pct_free_float']]
+    print(f"  {len(df_final)} tickers encontrados no FRE.")
+    return df_final[['Ticker', 'cnpj', 'cd_cvm', 'qtd_acoes_totais', 'qtd_acoes_circulacao', 'pct_free_float']]
 
 def buscar_mfinance():
     print("Buscando empresas na MFinance...")
