@@ -377,7 +377,7 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             .execute()
             .data
         )
-        entreprises_data.extend(chunk)
+        empresas_data.extend(chunk)
         if len(chunk) < 1000:
             break
         offset += 1000
