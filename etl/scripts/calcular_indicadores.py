@@ -1,4 +1,4 @@
-from datetime import datetime, UTC, timedelta
+from datetime import datetime, timedelta
 import math
 
 import numpy as np
@@ -219,7 +219,7 @@ def buscar_dividendos() -> pd.DataFrame:
 
     df = pd.DataFrame(data)
     df["data_pagamento"] = pd.to_datetime(df["data_pagamento"])
-    df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
+    df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0)
     print(f"  {len(df)} eventos de dividendos carregados.")
     return df
 
@@ -251,10 +251,6 @@ def calcular_dividendos(df_div: pd.DataFrame):
 
 
 def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
-    """
-    Cálculo de CAGR otimizado usando operações vetorizadas do Pandas (shift e np.where)
-    em vez de iteração linha a linha, garantindo muito mais performance.
-    """
     print("Calculando CAGR 5 anos (base T4 - otimizado)...")
 
     data = []
@@ -281,18 +277,13 @@ def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
     df["receita_liquida_ytd"] = pd.to_numeric(df["receita_liquida_ytd"], errors="coerce")
     df["lucro_liquido_ytd"] = pd.to_numeric(df["lucro_liquido_ytd"], errors="coerce")
 
-    # Ordenar para garantir que o shift(5) pegue exatamente 5 anos atrás
     df = df.sort_values(["ticker", "ano"]).reset_index(drop=True)
 
-    # Criar colunas com os valores de 5 anos atrás usando groupby e shift
     df["rec_5a_ago"] = df.groupby("ticker")["receita_liquida_ytd"].shift(5)
     df["luc_5a_ago"] = df.groupby("ticker")["lucro_liquido_ytd"].shift(5)
 
-    # Manter apenas o ano mais recente de cada ticker
     df_latest = df.loc[df.groupby("ticker")["ano"].idxmax()].copy()
 
-    # Calcular CAGR de forma vetorizada (muito mais rápido que loop)
-    # Condição: base > 0 e valores não nulos
     mask_rec = (df_latest["rec_5a_ago"] > 0) & (df_latest["receita_liquida_ytd"].notna()) & (df_latest["rec_5a_ago"].notna())
     mask_luc = (df_latest["luc_5a_ago"] > 0) & (df_latest["lucro_liquido_ytd"].notna()) & (df_latest["luc_5a_ago"].notna())
 
@@ -310,11 +301,10 @@ def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
 
     result = df_latest[["ticker", "cagr_receita_5a", "cagr_lucro_5a"]].copy()
     
-    # Aplicar safe_float para garantir limpeza dos dados
     result["cagr_receita_5a"] = result["cagr_receita_5a"].apply(safe_float)
     result["cagr_lucro_5a"] = result["cagr_lucro_5a"].apply(safe_float)
 
-    print(f"  CAGR calculado para {len(result)} tickers.")
+    print(f"  CAGR calculado pour {len(result)} tickers.")
     return result
 
 
@@ -373,11 +363,10 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     })
 
     # ============================================================
-    # MUDANÇA CRÍTICA: Calcular quantidade total de ações por CD_CVM
+    # MUDANÇA CRÍTICA: Calcular quantidade total de ações par CD_CVM
     # ============================================================
-    print("Calculando quantidade total de ações por CD_CVM...")
+    print("Calculando quantidade total de ações par CD_CVM...")
     
-    # Buscar todos os tickers e suas quantidades de ações da tabela empresas
     empresas_data = []
     offset = 0
     while True:
@@ -388,7 +377,7 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             .execute()
             .data
         )
-        empresas_data.extend(chunk)
+        entreprises_data.extend(chunk)
         if len(chunk) < 1000:
             break
         offset += 1000
@@ -396,30 +385,27 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df_empresas = pd.DataFrame(empresas_data)
     df_empresas["quantidade_acoes"] = pd.to_numeric(df_empresas["quantidade_acoes"], errors="coerce")
     
-    # Agrupar por CD_CVM e somar as quantidades de ações
-    acoes_por_cdcvm = (
+    acoes_par_cdcvm = (
         df_empresas.groupby("cd_cvm")["quantidade_acoes"]
         .sum()
         .reset_index()
         .rename(columns={"quantidade_acoes": "quantidade_acoes_consolidada"})
     )
     
-    # Criar mapa ticker -> quantidade_acoes_consolidada
-    ticker_para_cdcvm = df_empresas[["ticker", "cd_cvm"]].drop_duplicates()
-    ticker_para_acoes_consolidada = ticker_para_cdcvm.merge(
-        acoes_por_cdcvm, on="cd_cvm", how="left"
+    ticker_pour_cdcvm = df_empresas[["ticker", "cd_cvm"]].drop_duplicates()
+    ticker_pour_acoes_consolidada = ticker_pour_cdcvm.merge(
+        acoes_par_cdcvm, on="cd_cvm", how="left"
     )
     
-    # Converter para dicionário para acesso rápido
     mapa_acoes_consolidadas = dict(
-        zip(ticker_para_acoes_consolidada["ticker"], 
-            ticker_para_acoes_consolidada["quantidade_acoes_consolidada"])
+        zip(ticker_pour_acoes_consolidada["ticker"], 
+            ticker_pour_acoes_consolidada["quantidade_acoes_consolidada"])
     )
     
-    print(f"  Total de ações consolidadas calculado para {len(mapa_acoes_consolidadas)} tickers.")
+    print(f"  Total de ações consolidadas calculé pour {len(mapa_acoes_consolidadas)} tickers.")
     # ============================================================
 
-    registros_saida = []
+    registres_sortie = []
 
     for _, row in df.iterrows():
         t = row.get
@@ -429,13 +415,13 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         ticker_atual = row["ticker"]
         qty_consolidada = safe_float(mapa_acoes_consolidadas.get(ticker_atual))
         
-        # Manter quantidade individual para Market Cap e outros cálculos
-        qty_individual = safe_float(t("quantidade_acoes"))
+        # Manter quantidade individuelle pour Market Cap et autres calculs
+        qty_individuelle = safe_float(t("quantite_acoes"))
         
-        pl = safe_float(t("patrimonio_liquido"))
-        at = safe_float(t("ativo_total"))
-        ac = safe_float(t("ativo_circulante"))
-        pc = safe_float(t("passivo_circulante"))
+        pl = safe_float(t("patrimoine_liquide"))
+        at = safe_float(t("atif_total"))
+        ac = safe_float(t("atif_circulant"))
+        pc = safe_float(t("passif_circulant"))
         div_liq = safe_float(t("divida_liquida")) or 0.0
         rec = safe_float(t("receita_liquida"))
         ll = safe_float(t("lucro_liquido"))
@@ -446,17 +432,17 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         div6a = safe_float(t("dividendos_6a_media")) or 0.0
         
         # CORREÇÃO PSR: Buscar receita anual do último T4
-        receita_anual_t4 = safe_float(t("receita_anual_t4"))
+        receita_annuelle_t4 = safe_float(t("receita_annuelle_t4"))
 
-        # Market Cap usa quantidade individual do ticker
-        mc = (p * qty_individual) if (p and qty_individual) else None
+        # Market Cap utilise quantité individuelle du ticker
+        mc = (p * qty_individuelle) if (p and qty_individuelle) else None
         
-        # Market Cap consolidado para PSR
+        # Market Cap consolidado pour PSR
         mc_consolidado = (p * qty_consolidada) if (p and qty_consolidada) else None
         
         ev = (mc + div_liq) if mc is not None else None
         
-        # LPA e VPA usam quantidade consolidada do CD_CVM (VALORES EXATOS, SEM ARREDONDAMENTO)
+        # LPA e VPA usam quantidade consolidada du CD_CVM (VALORES EXATOS, SEM ARREDONDAMENTO)
         lpa = sd(ll, qty_consolidada)
         vpa = sd(pl, qty_consolidada)
         
@@ -472,11 +458,11 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "dy_atual": sd(div12m, p),
             "p_l": sd(p, lpa),
             "p_vp": sd(p, vpa),
-            # CORREÇÃO PSR: Usar Market Cap consolidado e receita anual do T4
-            "p_receita": sd(mc_consolidado, receita_anual_t4),
+            # CORREÇÃO PSR: Usar Market Cap consolidado e receita anual du T4
+            "p_receita": sd(mc_consolidado, receita_annuelle_t4),
             "p_ativo": sd(mc, at),
             "p_cap_giro": sd(mc, cap_giro),
-            "p_ativo_circ_liq": sd(mc, cap_giro),
+            "p_atif_circ_liq": sd(mc, cap_giro),
             "p_ebit": sd(mc, ebit),
             "p_ebitda": sd(mc, ebitda),
             "ev_ebit": sd(ev, ebit),
@@ -490,9 +476,9 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "margem_ebitda": sd(ebitda, safe_float(t("receita_liquida"))),
             "margem_liquida": sd(ll, safe_float(t("receita_liquida"))),
             "liquidez_corrente": sd(ac, pc),
-            "passivos_ativos": sd((at - pl) if (at and pl) else None, at),
-            "pl_ativos": sd(pl, at),
-            "div_liq_ativos": sd(div_liq, at),
+            "passifs_atifs": sd((at - pl) if (at and pl) else None, at),
+            "pl_atifs": sd(pl, at),
+            "div_liq_atifs": sd(div_liq, at),
             "div_liq_pl": sd(div_liq, pl),
             "div_liq_ebit": sd(div_liq, ebit),
             "div_liq_ebitda": sd(div_liq, ebitda),
@@ -530,25 +516,25 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         pt = rec_dict.get("agf")
         rec_dict["agf_upside"] = sd(((pt / p - 1) * 100) if (pt and p) else None, 1)
 
-        registros_saida.append(limpar_registro(rec_dict))
+        registres_sortie.append(limpar_registro(rec_dict))
 
-    print(f"Salvando {len(registros_saida)} registros...")
+    print(f"Salvando {len(registres_sortie)} registres...")
 
     lote = 100
     erros = 0
-    salvos = 0
-    for i in range(0, len(registros_saida), lote):
+    sauves = 0
+    for i in range(0, len(registres_sortie), lote):
         try:
             supabase.table("indicadores").upsert(
-                registros_saida[i: i + lote],
+                registres_sortie[i: i + lote],
                 on_conflict="ticker,data_calculo",
             ).execute()
-            salvos += len(registros_saida[i: i + lote])
+            sauves += len(registres_sortie[i: i + lote])
         except Exception as e:
             erros += 1
             print(f"  Erro no lote {i}: {e}")
 
-    print(f"Concluido. {salvos} registros salvos, {erros} lotes com erro.")
+    print(f"Concluido. {sauves} registres sauves, {erros} lotes com erro.")
 
 
 def main():
