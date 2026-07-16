@@ -53,7 +53,7 @@ def obter_dados_empresas():
         .data
     )
 
-    # Mapa individual (ticker -> acoes)
+    # OPÇÃO B: Mapa agora guarda uma LISTA de tickers por cd_cvm
     mapa_tickers = {}
     mapa_acoes_individual = {}
     
@@ -66,7 +66,12 @@ def obter_dados_empresas():
             ticker = e['ticker']
             qtd = int(e['quantidade_acoes']) if e.get('quantidade_acoes') else 0
             
-            mapa_tickers[key] = ticker
+            # OPÇÃO B: Adicionar o ticker à lista daquele CD_CVM
+            if key not in mapa_tickers:
+                mapa_tickers[key] = []
+            mapa_tickers[key].append(ticker)
+            
+            # Guardar a quantidade individual daquele ticker específico
             mapa_acoes_individual[ticker] = qtd
             
             # Soma consolidada por CD_CVM
@@ -74,9 +79,11 @@ def obter_dados_empresas():
                 mapa_acoes_consolidado[key] = 0
             mapa_acoes_consolidado[key] += qtd
 
-    print(f"  {len(mapa_tickers)} tickers mapeados.")
-    print(f"  {len(mapa_acoes_consolidado)} CD_CVMs únicos (empresas consolidadas).")
-    return mapa_tickers, mapa_acoes_consolidado
+    print(f"  {len(mapa_acoes_consolidado)} CD_CVMs únicos mapeados.")
+    print(f"  {sum(len(v) for v in mapa_tickers.values())} tickers no total (incluindo ON/PN/Units).")
+    
+    # Retorna os 3 mapas
+    return mapa_tickers, mapa_acoes_individual, mapa_acoes_consolidado
 
 
 def extrair_lucro_liquido(df):
@@ -95,17 +102,11 @@ def extrair_lucro_liquido(df):
 
 
 def extrair_caixa(df):
-    """
-    Caixa do BPA:
-    Prioridade 1 -> Conta mãe 1.01.01
-    Prioridade 2 -> Soma das filhas 1.01.01.*
-    """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
 
     resultado = []
 
-    # PRIORIDADE 1: Conta mãe 1.01.01
     mask_mae = df['CD_CONTA_STR'] == '1.01.01'
     if mask_mae.any():
         mae = (
@@ -118,7 +119,6 @@ def extrair_caixa(df):
         mae['prioridade'] = 1
         resultado.append(mae)
 
-    # PRIORIDADE 2: Soma das filhas 1.01.01.*
     mask_filhas = df['CD_CONTA_STR'].str.startswith('1.01.01.', na=False)
     if mask_filhas.any():
         filhas = (
@@ -148,10 +148,6 @@ def extrair_caixa(df):
 
 
 def extrair_caixa_dfc(df):
-    """
-    Caixa do DFC (fallback):
-    Conta 6.05.02 = Saldo Final de Caixa e Equivalentes
-    """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
@@ -168,17 +164,11 @@ def extrair_caixa_dfc(df):
 
 
 def extrair_patrimonio_liquido(df):
-    """
-    Extrai PL com lógica de prioridade para bancos:
-    - 2.03: empresas normais
-    - 2.08, 2.07, 2.07.01+2.07.02: bancos
-    """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
     resultados = []
     
-    # PASSO 1: 2.03 COM verificação de descrição
     mask_pl_desc = (
         df['DS_CONTA'].astype(str).str.contains('patrimonio', case=False, na=False) |
         df['DS_CONTA'].astype(str).str.contains('patrimônio', case=False, na=False)
@@ -189,21 +179,18 @@ def extrair_patrimonio_liquido(df):
         res['prioridade'] = 1
         resultados.append(res)
     
-    # PASSO 2: 2.08 (bancos grandes)
     mask_208 = df['CD_CONTA_STR'] == '2.08'
     if df[mask_208].shape[0] > 0:
         res = df[mask_208].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
         res['prioridade'] = 2
         resultados.append(res)
     
-    # PASSO 3: 2.07 (bancos médios)
     mask_207 = df['CD_CONTA_STR'] == '2.07'
     if df[mask_207].shape[0] > 0:
         res = df[mask_207].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].first().reset_index()
         res['prioridade'] = 3
         resultados.append(res)
     
-    # PASSO 4: 2.07.01 + 2.07.02 (soma)
     mask_sub = df['CD_CONTA_STR'].isin(['2.07.01', '2.07.02'])
     if df[mask_sub].shape[0] > 0:
         res = df[mask_sub].groupby(['CD_CVM', 'DT_REFER'])['VL_CONTA'].sum().reset_index()
@@ -221,15 +208,11 @@ def extrair_patrimonio_liquido(df):
 
 
 def extrair_divida_bruta(df):
-    """
-    Dívida Bruta = 2.01.04 (CP) + 2.02.01 (LP)
-    """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
 
     resultado = []
 
-    # 2.01.04 - Dívida CP
     mask_20104_mae = df['CD_CONTA_STR'] == '2.01.04'
     if mask_20104_mae.any():
         c20104_mae = (
@@ -256,7 +239,6 @@ def extrair_divida_bruta(df):
         c20104_filhas['prioridade'] = 2
         resultado.append(c20104_filhas)
 
-    # 2.02.01 - Dívida LP
     mask_20201_mae = df['CD_CONTA_STR'] == '2.02.01'
     if mask_20201_mae.any():
         c20201_mae = (
@@ -306,11 +288,6 @@ def extrair_divida_bruta(df):
 
 
 def extrair_depreciacao_amortizacao_dva(df):
-    """
-    D&A via DVA:
-    - 7.04.01: Empresas normais
-    - 7.05.01: Bancos
-    """
     df = df.copy()
     df['CD_CONTA_STR'] = df['CD_CONTA'].astype(str).str.strip()
     
@@ -340,7 +317,7 @@ def processar_csv_dre(df_csv, mapeamento):
     return frames
 
 
-def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
+def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes_individual):
     url = f"https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/{tipo_doc}/DADOS/{tipo_doc.lower()}_cia_aberta_{ano}.zip"
 
     try:
@@ -486,10 +463,9 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
             da = df_final.get('depreciacao_amortizacao', pd.Series(0, index=df_final.index)).fillna(0)
             df_final['ebitda'] = df_final['ebit'] + da
 
-        # CORREÇÃO: Criar coluna depreciacao_amortizacao_ytd (YTD = acumulado no ano)
+        # CORREÇÃO: Criar coluna depreciacao_amortizacao_ytd
         if 'depreciacao_amortizacao' in df_final.columns:
             df_final['depreciacao_amortizacao_ytd'] = df_final['depreciacao_amortizacao']
-            # Remover a coluna base (sem sufixo) pois não existe mais no banco
             df_final = df_final.drop(columns=['depreciacao_amortizacao'])
 
         # 2. Escala: MILHARES -> REAIS
@@ -528,14 +504,17 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes):
                 df_final['ativo_total'] - df_final['patrimonio_liquido']
             )
 
-        # Mapear ticker
+        # OPÇÃO B: Mapear tickers (Agora retorna uma lista)
         df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
-        df_final['ticker'] = df_final['CD_CVM_STR'].map(mapa_tickers)
+        df_final['ticker_list'] = df_final['CD_CVM_STR'].map(mapa_tickers)
         
-        # CORREÇÃO CRÍTICA: Usar quantidade consolidada por CD_CVM
-        df_final['quantidade_acoes'] = df_final['CD_CVM_STR'].map(mapa_acoes)
-        
-        df_final = df_final.dropna(subset=['ticker'])
+        # OPÇÃO B: Explodir a lista de tickers para duplicar as linhas (ON/PN/Unit)
+        df_final = df_final.dropna(subset=['ticker_list'])
+        df_final = df_final.explode('ticker_list')
+        df_final = df_final.rename(columns={'ticker_list': 'ticker'})
+
+        # CORREÇÃO CRÍTICA: Usar quantidade INDIVIDUAL por ticker para Market Cap
+        df_final['quantidade_acoes'] = df_final['ticker'].map(mapa_acoes_individual)
 
         if df_final.empty:
             return pd.DataFrame()
@@ -583,7 +562,6 @@ def calcular_colunas_q(df):
     print("Calculando colunas _q...")
     df = df.sort_values(['ticker', 'ano', 'data_referencia']).reset_index(drop=True)
 
-    # CORREÇÃO: Adicionar 'depreciacao_amortizacao' na lista de colunas para desacumular
     colunas_para_desacumular = COLUNAS_DRE + ['depreciacao_amortizacao']
     
     for col_base in colunas_para_desacumular:
@@ -602,7 +580,10 @@ def calcular_colunas_q(df):
 
 def main():
     print("Iniciando ETL de fundamentos CVM...")
-    mapa_tickers, mapa_acoes = obter_dados_empresas()
+    
+    # Descompacta os 3 mapas retornados
+    mapa_tickers, mapa_acoes_individual, mapa_acoes_consolidado = obter_dados_empresas()
+    
     if not mapa_tickers:
         print("Nenhum ticker. Abortando.")
         return
@@ -613,12 +594,13 @@ def main():
     for ano in range(ANO_INICIAL, ANO_FINAL + 1):
         print(f"\nAno {ano}...")
 
-        df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes)
+        # Passa o mapa_acoes_individual para o processamento
+        df_dfp = processar_ano(ano, 'DFP', mapa_tickers, mapa_acoes_individual)
         if not df_dfp.empty:
             todos_dfp.append(df_dfp)
             print(f"  DFP: {len(df_dfp)} registros")
 
-        df_itr = processar_ano(ano, 'ITR', mapa_tickers, mapa_acoes)
+        df_itr = processar_ano(ano, 'ITR', mapa_tickers, mapa_acoes_individual)
         if not df_itr.empty:
             todos_itr.append(df_itr)
             print(f"  ITR: {len(df_itr)} registros")
