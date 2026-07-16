@@ -133,10 +133,11 @@ while True:
 hist_roe_df = pd.DataFrame(hist_roe_resp)
 
 # Regra: Excluir ano parcial (corrente) e pegar 5 anos completos
-ano_max = hist_roe_df["ano"].max()
+# CORREÇÃO: Remover ano parcial (ano corrente) e pegar 5 anos completos
+ano_atual = datetime.now().year
 anos_disponiveis = [
     a for a in sorted(hist_roe_df["ano"].unique(), reverse=True)
-    if a < ano_max
+    if a < ano_atual
 ][:5]
 
 hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
