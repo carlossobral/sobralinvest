@@ -400,22 +400,34 @@ for _, row in df.iterrows():
 resultado_df = pd.DataFrame(resultados)
 
 # ==========================================================
-# 12. ATUALIZAR SCORE_CS
+# 12. ATUALIZAR SCORE_CS (VERSÃO OTIMIZADA BATCH UPSERT)
 # ==========================================================
-print(f"Atualizando Score CS para {len(resultado_df)} empresas...")
+print(f"Atualizando Score CS para {len(resultado_df)} empresas (Batch Upsert)...")
 
-registros_update = resultado_df.to_dict(orient="records")
+# Prepara o payload com as chaves únicas + o dado a ser atualizado
+batch_payload = []
+for _, row in resultado_df.iterrows():
+    batch_payload.append({
+        "ticker": row["ticker"],
+        "data_calculo": data_calculo, # Necessário para o upsert resolver o conflito
+        "score_cs": row["score_cs"]
+    })
+
+# Upsert em lotes de 100
+lote = 100
 erros = 0
 salvos = 0
 
-for reg in registros_update:
+for i in range(0, len(batch_payload), lote):
+    lote_atual = batch_payload[i: i + lote]
     try:
-        supabase.table("indicadores").update({
-            "score_cs": reg["score_cs"]
-        }).eq("ticker", reg["ticker"]).eq("data_calculo", data_calculo).execute()
-        salvos += 1
+        supabase.table("indicadores").upsert(
+            lote_atual,
+            on_conflict="ticker,data_calculo" # Chave que definimos lá no início!
+        ).execute()
+        salvos += len(lote_atual)
     except Exception as e:
         erros += 1
-        print(f"  Erro ao atualizar {reg['ticker']}: {e}")
+        print(f"  Erro no lote {i}: {e}")
 
-print(f"✅ Score CS atualizado com sucesso. {salvos} salvos, {erros} erros.")
+print(f"✅ Score CS atualizado com sucesso. {salvos} registros processados, {erros} lotes com erro.")
