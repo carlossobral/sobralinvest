@@ -8,7 +8,6 @@ indicadores + empresas + metricas_score + dividendos = score_cs
 """
 
 import pandas as pd
-import numpy as np
 from datetime import datetime
 from etl.database.supabase_client import supabase
 
