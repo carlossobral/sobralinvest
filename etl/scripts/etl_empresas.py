@@ -5,6 +5,7 @@ from pathlib import Path
 import httpx
 import pandas as pd
 import re
+import math
 from etl.database.supabase_client import supabase
 
 URL_MFINANCE = "https://mfinance.com.br/api/v1/stocks"
@@ -29,6 +30,20 @@ def registrar_carga(status: str, registros: int, mensagem: str):
         "registros": registros,
         "mensagem": mensagem,
     }).execute()
+
+def limpar_nan(registros):
+    """Converte valores NaN do Pandas para None (null no banco)"""
+    for r in registros:
+        for k, v in r.items():
+            if isinstance(v, float) and math.isnan(v):
+                r[k] = None
+            # Trata pd.NA caso exista
+            try:
+                if pd.isna(v):
+                    r[k] = None
+            except:
+                pass
+    return registros
 
 def buscar_mfinance():
     print("1. Buscando empresas na MFinance...")
@@ -201,9 +216,6 @@ def main():
         print("7. Aplicando filtros (TICKERS_IGNORADOS)...")
         df_final = df_final[~df_final["ticker"].isin(TICKERS_IGNORADOS)].copy()
         
-        # Substitui NaN por None para o Supabase não reclamar
-        df_final = df_final.where(pd.notnull(df_final), None)
-        
         colunas_finais = [
             "ticker", "nome", "setor", "subsetor", "segmento",
             "quantidade_acoes", "cnpj", "cd_cvm", "qtd_acoes_totais",
@@ -212,6 +224,7 @@ def main():
         df_final = df_final[colunas_finais]
         
         registros = df_final.to_dict('records')
+        registros = limpar_nan(registros) # <-- AQUI MATA O ERRO DO JSON
         
         print(f"8. Iniciando Upsert no Supabase ({len(registros)} registros)...")
         lote = 500
