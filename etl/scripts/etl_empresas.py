@@ -31,20 +31,6 @@ def registrar_carga(status: str, registros: int, mensagem: str):
         "mensagem": mensagem,
     }).execute()
 
-def limpar_nan(registros):
-    """Converte valores NaN do Pandas para None (null no banco)"""
-    for r in registros:
-        for k, v in r.items():
-            if isinstance(v, float) and math.isnan(v):
-                r[k] = None
-            # Trata pd.NA caso exista
-            try:
-                if pd.isna(v):
-                    r[k] = None
-            except:
-                pass
-    return registros
-
 def buscar_mfinance():
     print("1. Buscando empresas na MFinance...")
     response = httpx.get(URL_MFINANCE, timeout=60)
@@ -209,180 +195,60 @@ def main():
         df_final = df_final.merge(df_fre, on="cnpj", how="left")
         
         # ==========================================
-# TRATAMENTO FINAL DOS DADOS
-# ==========================================
+        # TRATAMENTO FINAL DOS DADOS
+        # ==========================================
+        print("6. Calculando Free Float e ajustando tipos...")
+        
+        df_final["qtd_acoes_totais"] = pd.to_numeric(df_final["qtd_acoes_totais"], errors="coerce")
+        df_final["qtd_acoes_circulacao"] = pd.to_numeric(df_final["qtd_acoes_circulacao"], errors="coerce")
+        df_final["pct_free_float"] = (df_final["qtd_acoes_circulacao"] / df_final["qtd_acoes_totais"]) * 100
+        
+        # Ajuste dos tipos para Int64 (nullable do pandas) para evitar virar float no JSON
+        for col in ["cd_cvm", "quantidade_acoes", "qtd_acoes_totais", "qtd_acoes_circulacao"]:
+            if col in df_final.columns:
+                df_final[col] = pd.to_numeric(df_final[col], errors="coerce").round(0).astype("Int64")
+        
+        print("7. Aplicando filtros (TICKERS_IGNORADOS)...")
+        df_final = df_final[~df_final["ticker"].isin(TICKERS_IGNORADOS)].copy()
+        
+        colunas_finais = [
+            "ticker", "nome", "setor", "subsetor", "segmento",
+            "quantidade_acoes", "cnpj", "cd_cvm", "qtd_acoes_totais",
+            "qtd_acoes_circulacao", "pct_free_float", "ativo"
+        ]
+        df_final = df_final[colunas_finais]
+        
+        # ==========================================
+        # CONVERSÃO SEGURA PARA JSON
+        # ==========================================
+        registros = []
+        for _, row in df_final.iterrows():
+            registro = {}
+            for col in df_final.columns:
+                valor = row[col]
+                if pd.isna(valor):
+                    valor = None
+                elif str(df_final[col].dtype) == "Int64":
+                    valor = int(valor)
+                registro[col] = valor
+            registros.append(registro)
+            
+        print(f"8. Iniciando Upsert no Supabase ({len(registros)} registros)...")
+        lote = 500
+        for i in range(0, len(registros), lote):
+            supabase.table("empresas").upsert(
+                registros[i:i+lote], 
+                on_conflict="ticker"
+            ).execute()
+            
+        mensagem = f"{len(registros)} empresas carregadas e atualizadas com sucesso."
+        registrar_carga(status="SUCESSO", registros=len(registros), mensagem=mensagem)
+        print(f"✅ CONCLUÍDO! {mensagem}")
+        
+    except Exception as e:
+        registrar_carga(status="ERRO", registros=0, mensagem=str(e))
+        print(f"❌ ERRO FATAL: {e}")
+        raise
 
-print("6. Calculando Free Float...")
-
-df_final["qtd_acoes_totais"] = pd.to_numeric(
-    df_final["qtd_acoes_totais"],
-    errors="coerce"
-)
-
-df_final["qtd_acoes_circulacao"] = pd.to_numeric(
-    df_final["qtd_acoes_circulacao"],
-    errors="coerce"
-)
-
-df_final["pct_free_float"] = (
-    df_final["qtd_acoes_circulacao"]
-    / df_final["qtd_acoes_totais"]
-) * 100
-
-# ==========================================
-# AJUSTE DOS TIPOS
-# ==========================================
-
-# cd_cvm precisa ser inteiro de verdade
-if "cd_cvm" in df_final.columns:
-    df_final["cd_cvm"] = (
-        pd.to_numeric(
-            df_final["cd_cvm"],
-            errors="coerce"
-        )
-        .round(0)
-        .astype("Int64")
-    )
-
-# quantidade_acoes do MFinance
-if "quantidade_acoes" in df_final.columns:
-    df_final["quantidade_acoes"] = (
-        pd.to_numeric(
-            df_final["quantidade_acoes"],
-            errors="coerce"
-        )
-        .round(0)
-        .astype("Int64")
-    )
-
-# FRE
-if "qtd_acoes_totais" in df_final.columns:
-    df_final["qtd_acoes_totais"] = (
-        pd.to_numeric(
-            df_final["qtd_acoes_totais"],
-            errors="coerce"
-        )
-        .round(0)
-        .astype("Int64")
-    )
-
-if "qtd_acoes_circulacao" in df_final.columns:
-    df_final["qtd_acoes_circulacao"] = (
-        pd.to_numeric(
-            df_final["qtd_acoes_circulacao"],
-            errors="coerce"
-        )
-        .round(0)
-        .astype("Int64")
-    )
-
-# ==========================================
-# FILTRO DE IGNORADOS
-# ==========================================
-
-print("7. Aplicando filtros (TICKERS_IGNORADOS)...")
-
-df_final = df_final[
-    ~df_final["ticker"].isin(TICKERS_IGNORADOS)
-].copy()
-
-colunas_finais = [
-    "ticker",
-    "nome",
-    "setor",
-    "subsetor",
-    "segmento",
-    "quantidade_acoes",
-    "cnpj",
-    "cd_cvm",
-    "qtd_acoes_totais",
-    "qtd_acoes_circulacao",
-    "pct_free_float",
-    "ativo",
-]
-
-df_final = df_final[colunas_finais]
-
-# ==========================================
-# CONVERSÃO SEGURA PARA JSON
-# ==========================================
-
-def converter_valor(v):
-
-    if pd.isna(v):
-        return None
-
-    # pandas Int64 -> int python
-    if isinstance(v, (pd.Int64Dtype,)):
-        return int(v)
-
-    # numpy integers
-    try:
-        import numpy as np
-
-        if isinstance(v, np.integer):
-            return int(v)
-
-        if isinstance(v, np.floating):
-
-            if np.isnan(v):
-                return None
-
-            return float(v)
-
-    except:
-        pass
-
-    return v
-
-
-registros = []
-
-for _, row in df_final.iterrows():
-
-    registro = {}
-
-    for col in df_final.columns:
-
-        valor = row[col]
-
-        if pd.isna(valor):
-            valor = None
-
-        elif str(df_final[col].dtype) == "Int64":
-            valor = int(valor)
-
-        registro[col] = valor
-
-    registros.append(registro)
-
-print(f"8. Iniciando Upsert no Supabase ({len(registros)} registros)...")
-
-# DEBUG
-print(registros[:3])
-
-# ==========================================
-# UPSERT
-# ==========================================
-
-lote = 500
-
-for i in range(0, len(registros), lote):
-
-    supabase.table("empresas").upsert(
-        registros[i:i + lote],
-        on_conflict="ticker"
-    ).execute()
-
-mensagem = (
-    f"{len(registros)} empresas carregadas "
-    f"e atualizadas com sucesso."
-)
-
-registrar_carga(
-    status="SUCESSO",
-    registros=len(registros),
-    mensagem=mensagem
-)
-
-print(f"✅ CONCLUÍDO! {mensagem}")
+if __name__ == "__main__":
+    main()
