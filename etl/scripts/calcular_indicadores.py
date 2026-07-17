@@ -1,13 +1,10 @@
 from datetime import datetime, timedelta, UTC
 import math
-
 import numpy as np
 import pandas as pd
-
 from etl.database.supabase_client import supabase
 
 TAXA_IMPOSTO = 0.34
-
 
 def safe_float(v):
     """Converte valor para float limpo ou None."""
@@ -19,12 +16,10 @@ def safe_float(v):
     except (TypeError, ValueError):
         return None
 
-
 def limpar_registro(rec: dict) -> dict:
     """Garante que todos os valores float são serializáveis."""
     return {k: safe_float(v) if isinstance(v, (float, np.floating)) else v
             for k, v in rec.items()}
-
 
 def buscar_fundamentos() -> pd.DataFrame:
     print("Buscando fundamentos (todos os trimestres)...")
@@ -64,7 +59,7 @@ def buscar_fundamentos() -> pd.DataFrame:
     df["data_referencia"] = pd.to_datetime(df["data_referencia"], errors="coerce")
     df = df.sort_values(["ticker", "data_referencia"])
 
-    # ebitda_q nulo → estima como ebit_q
+    # ebitda_q nulo -> estima como ebit_q
     if "ebitda_q" in df.columns and "ebit_q" in df.columns:
         mask = df["ebitda_q"].isna() & df["ebit_q"].notna()
         df.loc[mask, "ebitda_q"] = df.loc[mask, "ebit_q"]
@@ -90,22 +85,15 @@ def buscar_fundamentos() -> pd.DataFrame:
             v = mais_recente.get(col)
             return safe_float(v)
 
-        # ============================================================
         # CORREÇÃO PSR: Buscar receita do último T4 disponível
-        # ============================================================
-        # Filtrar apenas registros do T4
         t4_records = grp[grp['trimestre'] == 4]
         
         if not t4_records.empty:
-            # Pegar o ano mais recente com T4 disponível
             ultimo_ano_t4 = t4_records['ano'].max()
-            # Buscar o registro desse ano e trimestre
             receita_anual_record = t4_records[t4_records['ano'] == ultimo_ano_t4].iloc[0]
             receita_anual = safe_float(receita_anual_record.get('receita_liquida_ytd'))
         else:
-            # Fallback: se não houver T4, usar None
             receita_anual = None
-        # ============================================================
 
         row = {
             "ticker": ticker,
@@ -126,7 +114,7 @@ def buscar_fundamentos() -> pd.DataFrame:
             "divida_bruta": bal("divida_bruta"),
             "divida_liquida": bal("divida_liquida"),
             "quantidade_acoes": bal("quantidade_acoes"),
-            "receita_anual_t4": receita_anual,  # Nova coluna para o PSR
+            "receita_anual_t4": receita_anual,
         }
         resultados.append(row)
 
@@ -143,7 +131,6 @@ def buscar_fundamentos() -> pd.DataFrame:
     df_out = df_out[mask].copy()
     print(f"  {len(df_out)} tickers com LTM válido.")
     return df_out
-
 
 def buscar_cotacoes() -> pd.DataFrame:
     print("Buscando cotacoes (ultimos 60 dias)...")
@@ -192,7 +179,6 @@ def buscar_cotacoes() -> pd.DataFrame:
     print(f"  {len(result)} cotacoes processadas.")
     return result
 
-
 def buscar_dividendos() -> pd.DataFrame:
     print("Buscando dividendos (ultimos 7 anos)...")
 
@@ -223,7 +209,6 @@ def buscar_dividendos() -> pd.DataFrame:
     print(f"  {len(df)} eventos de dividendos carregados.")
     return df
 
-
 def calcular_dividendos(df_div: pd.DataFrame):
     empty = pd.DataFrame(columns=["ticker"])
     if df_div.empty:
@@ -248,7 +233,6 @@ def calcular_dividendos(df_div: pd.DataFrame):
     )
 
     return div_12m, media_6a
-
 
 def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
     print("Calculando CAGR 5 anos (base T4 - otimizado)...")
@@ -304,9 +288,8 @@ def calcular_cagr(df_fund: pd.DataFrame) -> pd.DataFrame:
     result["cagr_receita_5a"] = result["cagr_receita_5a"].apply(safe_float)
     result["cagr_lucro_5a"] = result["cagr_lucro_5a"].apply(safe_float)
 
-    print(f"  CAGR calculado pour {len(result)} tickers.")
+    print(f"  CAGR calculado para {len(result)} tickers.")
     return result
-
 
 def sd(a, b):
     """Divisão segura: retorna None se denominador for 0, None ou NaN."""
@@ -317,7 +300,6 @@ def sd(a, b):
         return safe_float(r)
     except Exception:
         return None
-
 
 def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     if df_cot.empty:
@@ -363,9 +345,9 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     })
 
     # ============================================================
-    # MUDANÇA CRÍTICA: Calcular quantidade total de ações par CD_CVM
+    # MUDANÇA CRÍTICA: Calcular quantidade total de ações por CD_CVM
     # ============================================================
-    print("Calculando quantidade total de ações par CD_CVM...")
+    print("Calculando quantidade total de ações por CD_CVM...")
     
     empresas_data = []
     offset = 0
@@ -385,43 +367,42 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df_empresas = pd.DataFrame(empresas_data)
     df_empresas["quantidade_acoes"] = pd.to_numeric(df_empresas["quantidade_acoes"], errors="coerce")
     
-    acoes_par_cdcvm = (
+    acoes_por_cdcvm = (
         df_empresas.groupby("cd_cvm")["quantidade_acoes"]
         .sum()
         .reset_index()
         .rename(columns={"quantidade_acoes": "quantidade_acoes_consolidada"})
     )
     
-    ticker_pour_cdcvm = df_empresas[["ticker", "cd_cvm"]].drop_duplicates()
-    ticker_pour_acoes_consolidada = ticker_pour_cdcvm.merge(
-        acoes_par_cdcvm, on="cd_cvm", how="left"
+    ticker_para_cdcvm = df_empresas[["ticker", "cd_cvm"]].drop_duplicates()
+    ticker_para_acoes_consolidada = ticker_para_cdcvm.merge(
+        acoes_por_cdcvm, on="cd_cvm", how="left"
     )
     
     mapa_acoes_consolidadas = dict(
-        zip(ticker_pour_acoes_consolidada["ticker"], 
-            ticker_pour_acoes_consolidada["quantidade_acoes_consolidada"])
+        zip(ticker_para_acoes_consolidada["ticker"], 
+            ticker_para_acoes_consolidada["quantidade_acoes_consolidada"])
     )
     
-    print(f"  Total de ações consolidadas calculé pour {len(mapa_acoes_consolidadas)} tickers.")
+    print(f"  Total de ações consolidadas calculado para {len(mapa_acoes_consolidadas)} tickers.")
     # ============================================================
 
-    registres_sortie = []
+    registros_saida = []
 
     for _, row in df.iterrows():
         t = row.get
         p = safe_float(t("preco_atual"))
         
-        # USAR QUANTIDADE CONSOLIDADA DO CD_CVM PARA LPA E VPA
         ticker_atual = row["ticker"]
         qty_consolidada = safe_float(mapa_acoes_consolidadas.get(ticker_atual))
         
-        # Manter quantidade individuelle pour Market Cap et autres calculs
-        qty_individuelle = safe_float(t("quantite_acoes"))
+        # Manter quantidade individual para Market Cap e outros cálculos
+        qty_individual = safe_float(t("quantidade_acoes"))
         
-        pl = safe_float(t("patrimoine_liquide"))
-        at = safe_float(t("atif_total"))
-        ac = safe_float(t("atif_circulant"))
-        pc = safe_float(t("passif_circulant"))
+        pl = safe_float(t("patrimonio_liquido"))
+        at = safe_float(t("ativo_total"))
+        ac = safe_float(t("ativo_circulante"))
+        pc = safe_float(t("passivo_circulante"))
         div_liq = safe_float(t("divida_liquida")) or 0.0
         rec = safe_float(t("receita_liquida"))
         ll = safe_float(t("lucro_liquido"))
@@ -432,17 +413,17 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         div6a = safe_float(t("dividendos_6a_media")) or 0.0
         
         # CORREÇÃO PSR: Buscar receita anual do último T4
-        receita_annuelle_t4 = safe_float(t("receita_annuelle_t4"))
+        receita_anual_t4 = safe_float(t("receita_anual_t4"))
 
-        # Market Cap utilise quantité individuelle du ticker
-        mc = (p * qty_individuelle) if (p and qty_individuelle) else None
+        # Market Cap utiliza quantidade individual do ticker
+        mc = (p * qty_individual) if (p and qty_individual) else None
         
-        # Market Cap consolidado pour PSR
+        # Market Cap consolidado para PSR
         mc_consolidado = (p * qty_consolidada) if (p and qty_consolidada) else None
         
         ev = (mc + div_liq) if mc is not None else None
         
-        # LPA e VPA usam quantidade consolidada du CD_CVM (VALORES EXATOS, SEM ARREDONDAMENTO)
+        # LPA e VPA usam quantidade consolidada do CD_CVM
         lpa = sd(ll, qty_consolidada)
         vpa = sd(pl, qty_consolidada)
         
@@ -458,11 +439,10 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "dy_atual": sd(div12m, p),
             "p_l": sd(p, lpa),
             "p_vp": sd(p, vpa),
-            # CORREÇÃO PSR: Usar Market Cap consolidado e receita anual du T4
-            "p_receita": sd(mc_consolidado, receita_annuelle_t4),
+            "p_receita": sd(mc_consolidado, receita_anual_t4),
             "p_ativo": sd(mc, at),
             "p_cap_giro": sd(mc, cap_giro),
-            "p_atif_circ_liq": sd(mc, cap_giro),
+            "p_ativo_circ_liq": sd(mc, cap_giro),
             "p_ebit": sd(mc, ebit),
             "p_ebitda": sd(mc, ebitda),
             "ev_ebit": sd(ev, ebit),
@@ -476,9 +456,9 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "margem_ebitda": sd(ebitda, safe_float(t("receita_liquida"))),
             "margem_liquida": sd(ll, safe_float(t("receita_liquida"))),
             "liquidez_corrente": sd(ac, pc),
-            "passifs_atifs": sd((at - pl) if (at and pl) else None, at),
-            "pl_atifs": sd(pl, at),
-            "div_liq_atifs": sd(div_liq, at),
+            "passivos_ativos": sd((at - pl) if (at and pl) else None, at),
+            "pl_ativos": sd(pl, at),
+            "div_liq_ativos": sd(div_liq, at),
             "div_liq_pl": sd(div_liq, pl),
             "div_liq_ebit": sd(div_liq, ebit),
             "div_liq_ebitda": sd(div_liq, ebitda),
@@ -516,26 +496,25 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         pt = rec_dict.get("agf")
         rec_dict["agf_upside"] = sd(((pt / p - 1) * 100) if (pt and p) else None, 1)
 
-        registres_sortie.append(limpar_registro(rec_dict))
+        registros_saida.append(limpar_registro(rec_dict))
 
-    print(f"Salvando {len(registres_sortie)} registres...")
+    print(f"Salvando {len(registros_saida)} registros...")
 
     lote = 100
     erros = 0
-    sauves = 0
-    for i in range(0, len(registres_sortie), lote):
+    salvos = 0
+    for i in range(0, len(registros_saida), lote):
         try:
             supabase.table("indicadores").upsert(
-                registres_sortie[i: i + lote],
+                registros_saida[i: i + lote],
                 on_conflict="ticker,data_calculo",
             ).execute()
-            sauves += len(registres_sortie[i: i + lote])
+            salvos += len(registros_saida[i: i + lote])
         except Exception as e:
             erros += 1
             print(f"  Erro no lote {i}: {e}")
 
-    print(f"Concluido. {sauves} registres sauves, {erros} lotes com erro.")
-
+    print(f"Concluido. {salvos} registros salvos, {erros} lotes com erro.")
 
 def main():
     print("Iniciando calculo de indicadores (LTM)...")
@@ -554,7 +533,6 @@ def main():
 
     print("\n========== FINAL ==========")
     print("Indicadores calculados com sucesso.")
-
 
 if __name__ == "__main__":
     main()
