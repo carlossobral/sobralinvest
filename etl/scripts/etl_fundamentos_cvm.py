@@ -6,6 +6,8 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
+#ANO_INICIAL = ANO_FINAL - 1
+#ANO_FINAL = datetime.now().year
 ANO_INICIAL = 2015
 ANO_FINAL = 2026
 
