@@ -141,7 +141,7 @@ def main():
     df_emp["qtd_acoes_totais"] = pd.to_numeric(df_emp["qtd_acoes_totais"], errors="coerce")
     df_fund = df_fund.merge(df_emp[['ticker', 'segmento', 'qtd_acoes_totais']], on='ticker', how='left')
     
-    # Cotações - Merge AsOf (Pega a cotação na data do balanço ou a anterior mais próxima)
+    # Cotações - Busca a cotação na data do balanço ou a anterior mais próxima
     if not df_cot.empty:
         df_cot["data"] = pd.to_datetime(df_cot["data"], errors="coerce")
         df_cot["fechamento"] = pd.to_numeric(df_cot["fechamento"], errors="coerce")
@@ -151,19 +151,36 @@ def main():
         # Calcula volume médio dos ultimos 30 dias historicos
         df_cot['volume_medio_30d'] = df_cot.groupby('ticker')['volume_financeiro'].rolling(window=30, min_periods=1).mean().reset_index(level=0, drop=True)
         
-        # Limpeza crítica para o merge_asof: Remover NaT e ordenar
-        df_cot = df_cot.dropna(subset=['data']).sort_values(['ticker', 'data']).reset_index(drop=True)
-        df_fund = df_fund.dropna(subset=['data_referencia']).sort_values(['ticker', 'data_referencia']).reset_index(drop=True)
+        # Limpeza e ordenação estrita por data
+        df_cot = df_cot.dropna(subset=['data']).sort_values('data').reset_index(drop=True)
+        df_fund = df_fund.dropna(subset=['data_referencia']).sort_values('data_referencia').reset_index(drop=True)
         
-        df_merged = pd.merge_asof(
-            df_fund, 
-            df_cot[['ticker', 'data', 'fechamento', 'volume_medio_30d']], 
-            left_on='data_referencia', 
-            right_on='data', 
-            by='ticker',
-            direction='backward'
-        )
-        df_merged.rename(columns={'fechamento': 'preco_atual', 'volume_medio_30d': 'volume_medio_diario'}, inplace=True)
+        # Abordagem alternativa sem merge_asof para evitar bug de sorted do Pandas
+        df_cot_dict = {}
+        for t, g in df_cot.groupby('ticker'):
+            g = g.sort_values('data')
+            df_cot_dict[t] = {'datas': g['data'].values, 'fech': g['fechamento'].values, 'vol': g['volume_medio_30d'].values}
+            
+        precos = []
+        vols = []
+        for _, row in df_fund.iterrows():
+            ticker = row['ticker']
+            data_ref = row['data_referencia']
+            p = np.nan
+            v = 0.0
+            if ticker in df_cot_dict and pd.notna(data_ref):
+                d = df_cot_dict[ticker]
+                # searchsorted com side='right' acha o índice logo após a data
+                idx = np.searchsorted(d['datas'], np.datetime64(data_ref), side='right')
+                if idx > 0:
+                    p = d['fech'][idx-1]
+                    v = d['vol'][idx-1]
+            precos.append(p)
+            vols.append(v)
+            
+        df_fund['preco_atual'] = precos
+        df_fund['volume_medio_diario'] = vols
+        df_merged = df_fund.copy()
     else:
         df_merged = df_fund.copy()
         df_merged['preco_atual'] = np.nan
