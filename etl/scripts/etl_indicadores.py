@@ -6,10 +6,6 @@ from etl.database.supabase_client import supabase
 
 TAXA_IMPOSTO = 0.34
 
-# Regra de Bancos e Seguradoras (mesma do CS Score)
-TICKERS_FINANCEIROS_ESPECIAIS = {"WIZC3", "CXSE3", "BBSE3"}
-TICKERS_ITSA = {"ITSA3", "ITSA4"}
-
 def safe_float(v):
     """Converte valor para float limpo ou None."""
     try:
@@ -298,14 +294,14 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
 
     print("Calculando indicadores...")
 
-    # Buscar dados das empresas (Setor, Segmento, Qtd Ações Oficial do FRE)
-    print("Buscando dados cadastrais e qtd_acoes_totais...")
+    # Buscar dados cadastrais (qtd_acoes_totais e segmento)
+    print("Buscando dados cadastrais (empresas)...")
     empresas_data = []
     offset = 0
     while True:
         chunk = (
             supabase.table("empresas")
-            .select("ticker, setor, segmento, qtd_acoes_totais")
+            .select("ticker, segmento, qtd_acoes_totais")
             .range(offset, offset + 999)
             .execute()
             .data
@@ -318,12 +314,13 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     df_empresas = pd.DataFrame(empresas_data)
     df_empresas["qtd_acoes_totais"] = pd.to_numeric(df_empresas["qtd_acoes_totais"], errors="coerce")
     
+    # Merge inicial
     df = (
         df_fund
         .merge(df_cot, on="ticker", how="inner")
         .merge(df_div_12m, on="ticker", how="left")
         .merge(df_div_6a, on="ticker", how="left")
-        .merge(df_empresas, on="ticker", how="left")
+        .merge(df_empresas[["ticker", "segmento", "qtd_acoes_totais"]], on="ticker", how="left")
     )
 
     if not df_cagr.empty:
@@ -349,25 +346,26 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         df["data_referencia"], errors="coerce"
     ).dt.strftime("%Y-%m-%d")
 
-    # Filtrar apenas empresas que possuem qtd_acoes_totais válido
-    df = df[df["qtd_acoes_totais"].notna() & (df["qtd_acoes_totais"] > 0)].copy()
+    df = df.rename(columns={
+        "receita_liquida_ltm": "receita_liquida",
+        "lucro_liquido_ltm": "lucro_liquido",
+        "ebit_ltm": "ebit",
+    })
 
     registros_saida = []
+
+    # Bancos e Seguradoras (Regra CS Score)
+    tickers_finan_especificos = {"WIZC3", "CXSE3", "BBSE3"}
+    tickers_itau = {"ITSA3", "ITSA4"}
 
     for _, row in df.iterrows():
         t = row.get
         p = safe_float(t("preco_atual"))
         
-        ticker_atual = str(row["ticker"])
-        segmento = str(t("segmento") or "").strip()
+        ticker_atual = row["ticker"]
+        segmento_atual = t("segmento")
         
-        # Regra Bancos/Seguradoras
-        is_banco = (segmento == "Bancos" and ticker_atual not in TICKERS_ITSA)
-        is_seguradora = (segmento == "Seguradoras")
-        is_financeiro_especial = ticker_atual in TICKERS_FINANCEIROS_ESPECIAIS
-        is_financeiro = is_banco or is_seguradora or is_financeiro_especial
-        
-        # Usa qtd_acoes_totais oficial da tabela empresas
+        # Qtd de ações oficial do FRE
         qty_total = safe_float(t("qtd_acoes_totais"))
         
         pl = safe_float(t("patrimonio_liquido"))
@@ -375,31 +373,36 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         ac = safe_float(t("ativo_circulante"))
         pc = safe_float(t("passivo_circulante"))
         div_liq = safe_float(t("divida_liquida")) or 0.0
-        
-        # Variáveis LTM
-        rec_ltm = safe_float(t("receita_liquida_ltm"))
-        ll_ltm = safe_float(t("lucro_liquido_ltm"))
-        ebit_ltm = safe_float(t("ebit_ltm"))
-        ebitda_ltm = safe_float(t("ebitda_ltm"))
-        lb_ltm = safe_float(t("lucro_bruto_ltm"))
-        
+        rec = safe_float(t("receita_liquida"))
+        ll = safe_float(t("lucro_liquido"))
+        ebit = safe_float(t("ebit"))
+        ebitda = safe_float(t("ebitda_ltm"))
+        lb = safe_float(t("lucro_bruto_ltm"))
         div12m = safe_float(t("dividendos_12m")) or 0.0
         div6a = safe_float(t("dividendos_6a_media")) or 0.0
 
-        # Market Cap utiliza quantidade total consolidada
+        # Market Cap usa qtd_total
         mc = (p * qty_total) if (p and qty_total) else None
         ev = (mc + div_liq) if mc is not None else None
         
-        # LPA e VPA usam quantidade total
-        lpa = sd(ll_ltm, qty_total)
+        # LPA e VPA usam qtd_total
+        lpa = sd(ll, qty_total)
         vpa = sd(pl, qty_total)
         
         cap_giro = (ac - pc) if (ac is not None and pc is not None) else None
         cap_inv = (pl + div_liq) if pl is not None else None
 
-        # Indicadores de Endividamento (Zerados para Financeiras)
-        div_liq_ebit_val = None if is_financeiro else sd(div_liq, ebit_ltm)
-        div_liq_ebitda_val = None if is_financeiro else sd(div_liq, ebitda_ltm)
+        # Lógica Banco/Seguradora
+        is_banco = segmento_atual == "Bancos" and ticker_atual not in tickers_itau
+        is_seguradora = segmento_atual == "Seguradoras" or ticker_atual in tickers_finan_especificos
+        is_financeira = is_banco or is_seguradora
+
+        div_liq_ebitda_val = sd(div_liq, ebitda)
+        div_liq_ebit_val = sd(div_liq, ebit)
+
+        if is_financeira:
+            div_liq_ebitda_val = None
+            div_liq_ebit_val = None
 
         rec_dict = {
             "ticker": ticker_atual,
@@ -410,22 +413,22 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "dy_atual": sd(div12m, p),
             "p_l": sd(p, lpa),
             "p_vp": sd(p, vpa),
-            "p_receita": sd(mc, rec_ltm), # PSR agora usa LTM
+            "p_receita": sd(mc, rec), # CORREÇÃO PSR: Agora usa Receita LTM
             "p_ativo": sd(mc, at),
             "p_cap_giro": sd(mc, cap_giro),
             "p_ativo_circ_liq": sd(mc, cap_giro),
-            "p_ebit": sd(mc, ebit_ltm),
-            "p_ebitda": sd(mc, ebitda_ltm),
-            "ev_ebit": sd(ev, ebit_ltm),
-            "ev_ebitda": sd(ev, ebitda_ltm),
-            "roe": sd(ll_ltm, pl),
-            "roa": sd(ll_ltm, at),
-            "roic": sd(ebit_ltm * (1 - TAXA_IMPOSTO) if ebit_ltm else None, cap_inv),
-            "giro_ativos": sd(rec_ltm, at),
-            "margem_bruta": sd(lb_ltm, rec_ltm),
-            "margem_ebit": sd(ebit_ltm, rec_ltm),
-            "margem_ebitda": sd(ebitda_ltm, rec_ltm),
-            "margem_liquida": sd(ll_ltm, rec_ltm),
+            "p_ebit": sd(mc, ebit),
+            "p_ebitda": sd(mc, ebitda),
+            "ev_ebit": sd(ev, ebit),
+            "ev_ebitda": sd(ev, ebitda),
+            "roe": sd(ll, pl),
+            "roa": sd(ll, at),
+            "roic": sd(ebit * (1 - TAXA_IMPOSTO) if ebit else None, cap_inv),
+            "giro_ativos": sd(safe_float(t("receita_liquida")), at),
+            "margem_bruta": sd(lb, safe_float(t("receita_liquida"))),
+            "margem_ebit": sd(ebit, safe_float(t("receita_liquida"))),
+            "margem_ebitda": sd(ebitda, safe_float(t("receita_liquida"))),
+            "margem_liquida": sd(ll, safe_float(t("receita_liquida"))),
             "liquidez_corrente": sd(ac, pc),
             "passivos_ativos": sd((at - pl) if (at and pl) else None, at),
             "pl_ativos": sd(pl, at),
@@ -435,9 +438,9 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "div_liq_ebitda": div_liq_ebitda_val,
             "cagr_receita_5a": safe_float(t("cagr_receita_5a")),
             "cagr_lucro_5a": safe_float(t("cagr_lucro_5a")),
-            "receita_liquida": rec_ltm,
-            "lucro_liquido": ll_ltm,
-            "ebit": ebit_ltm,
+            "receita_liquida": safe_float(t("receita_liquida")),
+            "lucro_liquido": ll,
+            "ebit": ebit,
             "lpa": lpa,
             "vpa": vpa,
             "graham": safe_float(
