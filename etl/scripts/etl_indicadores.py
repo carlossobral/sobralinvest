@@ -127,7 +127,12 @@ def main():
     ult_cotacao = df_cot.sort_values('data').drop_duplicates('ticker', keep='last').set_index('ticker')
 
     # Prep Dividendos
-    div_grouped = {t: g for t, g in df_div.groupby('ticker')} if not df_div.empty else {}
+    if not df_div.empty:
+        df_div["data_pagamento"] = pd.to_datetime(df_div["data_pagamento"], errors="coerce")
+        df_div["valor"] = pd.to_numeric(df_div["valor"], errors="coerce").fillna(0)
+        div_grouped = {t: g for t, g in df_div.groupby('ticker')}
+    else:
+        div_grouped = {}
 
     # FILTRO FINAL: Só processar registros a partir de ANO_INICIAL
     df_proc = df_fund[df_fund['ano'] >= ANO_INICIAL].copy()
