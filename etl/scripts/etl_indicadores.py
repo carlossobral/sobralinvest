@@ -143,16 +143,18 @@ def main():
     
     # Cotações - Merge AsOf (Pega a cotação na data do balanço ou a anterior mais próxima)
     if not df_cot.empty:
-        df_cot["data"] = pd.to_datetime(df_cot["data"])
+        df_cot["data"] = pd.to_datetime(df_cot["data"], errors="coerce")
         df_cot["fechamento"] = pd.to_numeric(df_cot["fechamento"], errors="coerce")
         df_cot["volume"] = pd.to_numeric(df_cot["volume"], errors="coerce").fillna(0)
         df_cot["volume_financeiro"] = df_cot["volume"] * df_cot["fechamento"]
         
         # Calcula volume médio dos ultimos 30 dias historicos
         df_cot['volume_medio_30d'] = df_cot.groupby('ticker')['volume_financeiro'].rolling(window=30, min_periods=1).mean().reset_index(level=0, drop=True)
-        df_cot = df_cot.sort_values(['ticker', 'data'])
         
-        df_fund = df_fund.sort_values(['ticker', 'data_referencia'])
+        # Limpeza crítica para o merge_asof: Remover NaT e ordenar
+        df_cot = df_cot.dropna(subset=['data']).sort_values(['ticker', 'data']).reset_index(drop=True)
+        df_fund = df_fund.dropna(subset=['data_referencia']).sort_values(['ticker', 'data_referencia']).reset_index(drop=True)
+        
         df_merged = pd.merge_asof(
             df_fund, 
             df_cot[['ticker', 'data', 'fechamento', 'volume_medio_30d']], 
