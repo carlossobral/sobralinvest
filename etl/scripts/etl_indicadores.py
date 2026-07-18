@@ -294,14 +294,14 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
 
     print("Calculando indicadores...")
 
-    # Buscar dados cadastrais (qtd_acoes_totais e segmento)
+    # Buscar dados cadastrais (qtd_acoes_totais, quantidade_acoes e segmento)
     print("Buscando dados cadastrais (empresas)...")
     empresas_data = []
     offset = 0
     while True:
         chunk = (
             supabase.table("empresas")
-            .select("ticker, segmento, qtd_acoes_totais")
+            .select("ticker, segmento, qtd_acoes_totais, quantidade_acoes")
             .range(offset, offset + 999)
             .execute()
             .data
@@ -313,6 +313,7 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     
     df_empresas = pd.DataFrame(empresas_data)
     df_empresas["qtd_acoes_totais"] = pd.to_numeric(df_empresas["qtd_acoes_totais"], errors="coerce")
+    df_empresas["quantidade_acoes"] = pd.to_numeric(df_empresas["quantidade_acoes"], errors="coerce")
     
     # Merge inicial
     df = (
@@ -320,7 +321,7 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         .merge(df_cot, on="ticker", how="inner")
         .merge(df_div_12m, on="ticker", how="left")
         .merge(df_div_6a, on="ticker", how="left")
-        .merge(df_empresas[["ticker", "segmento", "qtd_acoes_totais"]], on="ticker", how="left")
+        .merge(df_empresas[["ticker", "segmento", "qtd_acoes_totais", "quantidade_acoes"]], on="ticker", how="left")
     )
 
     if not df_cagr.empty:
@@ -332,7 +333,7 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
     for col in ["dividendos_12m", "dividendos_6a_media", "volume_medio_diario",
                 "ativo_total", "ativo_circulante", "passivo_circulante",
                 "patrimonio_liquido", "caixa", "divida_bruta", "divida_liquida",
-                "qtd_acoes_totais", "preco_atual"]:
+                "qtd_acoes_totais", "quantidade_acoes", "preco_atual"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -365,8 +366,13 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         ticker_atual = row["ticker"]
         segmento_atual = t("segmento")
         
-        # Qtd de ações oficial do FRE
+        # Qtd de ações
         qty_total = safe_float(t("qtd_acoes_totais"))
+        qty_individual = safe_float(t("quantidade_acoes"))
+        
+        # Fallback: Se a qtd individual falhar, usa a total para não quebrar o Market Cap
+        if not qty_individual:
+            qty_individual = qty_total
         
         pl = safe_float(t("patrimonio_liquido"))
         at = safe_float(t("ativo_total"))
@@ -381,11 +387,11 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
         div12m = safe_float(t("dividendos_12m")) or 0.0
         div6a = safe_float(t("dividendos_6a_media")) or 0.0
 
-        # Market Cap usa qtd_total
-        mc = (p * qty_total) if (p and qty_total) else None
+        # Market Cap usa qtd_individual
+        mc = (p * qty_individual) if (p and qty_individual) else None
         ev = (mc + div_liq) if mc is not None else None
         
-        # LPA e VPA usam qtd_total
+        # LPA e VPA usam qtd_total (consolidado)
         lpa = sd(ll, qty_total)
         vpa = sd(pl, qty_total)
         
@@ -413,7 +419,7 @@ def calcular_e_savar(df_fund, df_cot, df_div_12m, df_div_6a, df_cagr):
             "dy_atual": sd(div12m, p),
             "p_l": sd(p, lpa),
             "p_vp": sd(p, vpa),
-            "p_receita": sd(mc, rec), # CORREÇÃO PSR: Agora usa Receita LTM
+            "p_receita": sd(mc, rec), # CORREÇÃO PSR: Agora usa Receita LTM e Market Cap individual
             "p_ativo": sd(mc, at),
             "p_cap_giro": sd(mc, cap_giro),
             "p_ativo_circ_liq": sd(mc, cap_giro),
