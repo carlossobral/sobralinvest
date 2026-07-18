@@ -114,15 +114,14 @@ def buscar_cadastro_cvm():
         df_cvm = df_cvm.dropna(subset=['cnpj', 'CD_CVM'])
         df_cvm['cd_cvm'] = df_cvm['CD_CVM'].astype(int)
         
-        # 1. Extrai cd_cvm de TODAS as linhas (para não perder nenhuma empresa)
+        # Extrai cd_cvm de TODAS as linhas
         df_cd_cvm = df_cvm[['cnpj', 'cd_cvm']].drop_duplicates(subset='cnpj')
         
-        # 2. Extrai a data_registro_cvm APENAS das linhas BOLSA/ATIVO
+        # Extrai a data_registro_cvm APENAS das linhas BOLSA/ATIVO
         df_bolsa = df_cvm[(df_cvm["TP_MERC"] == "BOLSA") & (df_cvm["SIT"] == "ATIVO")].copy()
         df_bolsa['data_registro_cvm'] = pd.to_datetime(df_bolsa['DT_REG'], format="%Y-%m-%d", errors="coerce")
         df_bolsa = df_bolsa[['cnpj', 'data_registro_cvm']].drop_duplicates(subset='cnpj')
         
-        # Junta os dois
         df_final_cvm = df_cd_cvm.merge(df_bolsa, on='cnpj', how='left')
         
         print(f"   ✅ {len(df_final_cvm)} CNPJs mapeados para CD_CVM e Data Registro.")
@@ -156,20 +155,25 @@ def carregar_dados_fre():
         circulacao_file = f"fre_cia_aberta_distribuicao_capital_{ano}.csv"
         
         df_capital = pd.read_csv(z.open(capital_file), sep=";", encoding="latin1", low_memory=False)
-        df_circ = pd.read_csv(z.open(circulacao_file), sep=";", encoding="latin1", low_memory=False)
+        
+        # ==========================================
+        # SOLUÇÃO APLICADA: Filtrar apenas 'Capital Emitido'
+        # ==========================================
+        df_capital = df_capital[df_capital["Tipo_Capital"] == "Capital Emitido"].copy()
         
         df_capital["cnpj"] = df_capital["CNPJ_Companhia"].apply(normalizar_cnpj)
         capital = (
             df_capital.groupby("cnpj")["Quantidade_Total_Acoes"]
-            .sum()
+            .max() # Segurança extra para duplicidades
             .reset_index()
             .rename(columns={"Quantidade_Total_Acoes": "qtd_acoes_totais"})
         )
         
+        df_circ = pd.read_csv(z.open(circulacao_file), sep=";", encoding="latin1", low_memory=False)
         df_circ["cnpj"] = df_circ["CNPJ_Companhia"].apply(normalizar_cnpj)
         circulacao = (
             df_circ.groupby("cnpj")["Quantidade_Total_Acoes_Circulacao"]
-            .sum()
+            .sum() # Aqui somamos pois cada linha é um ticker diferente (ON, PN, Unit)
             .reset_index()
             .rename(columns={"Quantidade_Total_Acoes_Circulacao": "qtd_acoes_circulacao"})
         )
