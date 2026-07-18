@@ -5,7 +5,6 @@ from pathlib import Path
 import httpx
 import pandas as pd
 import re
-import math
 from etl.database.supabase_client import supabase
 
 URL_MFINANCE = "https://mfinance.com.br/api/v1/stocks"
@@ -13,8 +12,20 @@ URL_CVM_CADASTRO = "https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_
 URL_FRE_BASE = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FRE/DADOS/fre_cia_aberta_{ano}.zip"
 
 TICKERS_IGNORADOS = {
-    # "BIED3",
-    # "BRBI11",
+    "AFLT3", "AHEB3", "AHEB5", "AHEB6", "APTI3", "APTI4", "AURA33", "BALM3", 
+    "BALM4", "BBML3", "BDLL3", "BDLL4", "BOBR3", "BOBR4", "BRQB3", "CALI3", 
+    "CASN3", "CASN4", "CATA3", "CATA4", "CEGR3", "CTAX3", "CTCA3", "CTKA3", 
+    "CTKA4", "CTSA3", "CTSA4", "DOHL3", "DOHL4", "DTCY3", "DTCY4", "EALT3", 
+    "EALT4", "EKTR3", "EKTR4", "ENMT3", "ENMT4", "EPAR3", "ESTR3", "ESTR4", 
+    "FIGE3", "FIGE4", "G2DI33", "GPAR3", "GSHP3", "HBTS3", "HBTS5", "HBTS6", 
+    "HETA3", "HETA4", "HOOT3", "HOOT4", "IGSN3", "JFEN3", "JOPA3", "JOPA4", 
+    "LMED3", "LTEL3B", "LUXM3", "LUXM4", "MAPT3", "MAPT4", "MGEL3", "MGEL4", 
+    "MMAQ3", "MMAQ4", "MNDL3", "MRSA3B", "MRSA5B", "MRSA6B", "MSPA3", "MSPA4", 
+    "MWET3", "MWET4", "NEMO3", "ODER3", "ODER4", "OIBR3", "OIBR4", "OSXB3", 
+    "PATI3", "PATI4", "PEAB3", "PEAB4", "PLAS3", "PPAR3", "PPLA11", "PTCA3", 
+    "QUSW3", "RPAD3", "RPAD5", "RPAD6", "RPMG3", "RSID3", "SNSY3", "SNSY5", 
+    "SNSY6", "SOND3", "SOND5", "SOND6", "TELB3", "TELB4", "TXRX3", "TXRX4", 
+    "VSPT3", "VSPT4"
 }
 
 def normalizar_cnpj(cnpj):
