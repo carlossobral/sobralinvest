@@ -110,18 +110,23 @@ def buscar_cadastro_cvm():
         response.raise_for_status()
         
         df_cvm = pd.read_csv(BytesIO(response.content), sep=';', encoding='latin1')
-        
-        # Filtros do etl_listagem
-        df_cvm = df_cvm[(df_cvm["TP_MERC"] == "BOLSA") & (df_cvm["SIT"] == "ATIVO")].copy()
-        
         df_cvm['cnpj'] = df_cvm['CNPJ_CIA'].apply(normalizar_cnpj)
         df_cvm = df_cvm.dropna(subset=['cnpj', 'CD_CVM'])
         df_cvm['cd_cvm'] = df_cvm['CD_CVM'].astype(int)
-        df_cvm['data_registro_cvm'] = pd.to_datetime(df_cvm['DT_REG'], format="%Y-%m-%d", errors="coerce")
         
-        df_cvm = df_cvm[['cnpj', 'cd_cvm', 'data_registro_cvm']].drop_duplicates(subset='cnpj')
-        print(f"   ✅ {len(df_cvm)} CNPJs mapeados para CD_CVM e Data Registro.")
-        return df_cvm
+        # 1. Extrai cd_cvm de TODAS as linhas (para não perder nenhuma empresa)
+        df_cd_cvm = df_cvm[['cnpj', 'cd_cvm']].drop_duplicates(subset='cnpj')
+        
+        # 2. Extrai a data_registro_cvm APENAS das linhas BOLSA/ATIVO
+        df_bolsa = df_cvm[(df_cvm["TP_MERC"] == "BOLSA") & (df_cvm["SIT"] == "ATIVO")].copy()
+        df_bolsa['data_registro_cvm'] = pd.to_datetime(df_bolsa['DT_REG'], format="%Y-%m-%d", errors="coerce")
+        df_bolsa = df_bolsa[['cnpj', 'data_registro_cvm']].drop_duplicates(subset='cnpj')
+        
+        # Junta os dois
+        df_final_cvm = df_cd_cvm.merge(df_bolsa, on='cnpj', how='left')
+        
+        print(f"   ✅ {len(df_final_cvm)} CNPJs mapeados para CD_CVM e Data Registro.")
+        return df_final_cvm
     except Exception as e:
         print(f"   ❌ Erro ao baixar CVM: {e}")
         return pd.DataFrame(columns=['cnpj', 'cd_cvm', 'data_registro_cvm'])
@@ -213,14 +218,19 @@ def main():
         # ==========================================
         # TRATAMENTO FINAL DOS DADOS
         # ==========================================
-        print("6. Calculando Free Float e ajustando tipos...")
+        print("6. Calculando Free Float e Anos de Listagem...")
         
+        # Cálculo do Free Float
         df_final["qtd_acoes_totais"] = pd.to_numeric(df_final["qtd_acoes_totais"], errors="coerce")
         df_final["qtd_acoes_circulacao"] = pd.to_numeric(df_final["qtd_acoes_circulacao"], errors="coerce")
         df_final["pct_free_float"] = (df_final["qtd_acoes_circulacao"] / df_final["qtd_acoes_totais"]) * 100
         
+        # Cálculo dos Anos de Listagem
+        hoje = pd.Timestamp.now()
+        df_final["anos_listagem"] = ((hoje - df_final["data_registro_cvm"]).dt.days // 365).astype("Int64")
+        
         # Ajuste dos tipos para Int64 (nullable do pandas) para evitar virar float no JSON
-        for col in ["cd_cvm", "quantidade_acoes", "qtd_acoes_totais", "qtd_acoes_circulacao"]:
+        for col in ["cd_cvm", "quantidade_acoes", "qtd_acoes_totais", "qtd_acoes_circulacao", "anos_listagem"]:
             if col in df_final.columns:
                 df_final[col] = pd.to_numeric(df_final[col], errors="coerce").round(0).astype("Int64")
         
@@ -230,7 +240,7 @@ def main():
         colunas_finais = [
             "ticker", "nome", "setor", "subsetor", "segmento",
             "quantidade_acoes", "cnpj", "cd_cvm", "qtd_acoes_totais",
-            "qtd_acoes_circulacao", "pct_free_float", "data_registro_cvm", "ativo"
+            "qtd_acoes_circulacao", "pct_free_float", "data_registro_cvm", "anos_listagem", "ativo"
         ]
         df_final = df_final[colunas_finais]
         
@@ -247,7 +257,7 @@ def main():
                 elif str(df_final[col].dtype) == "Int64":
                     valor = int(valor)
                 elif isinstance(valor, pd.Timestamp):
-                    valor = valor.strftime("%Y-%m-%d") # Formata data para string
+                    valor = valor.strftime("%Y-%m-%d")
                 registro[col] = valor
             registros.append(registro)
             
