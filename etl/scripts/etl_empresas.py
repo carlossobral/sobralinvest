@@ -104,22 +104,27 @@ def buscar_cnpj_xlsx():
     return df_cnpj, mapa_ticker_cnpj
 
 def buscar_cadastro_cvm():
-    print("3. Baixando cadastro CVM (cd_cvm)...")
+    print("3. Baixando cadastro CVM (cd_cvm e data_registro)...")
     try:
         response = httpx.get(URL_CVM_CADASTRO, timeout=120, follow_redirects=True)
         response.raise_for_status()
         
         df_cvm = pd.read_csv(BytesIO(response.content), sep=';', encoding='latin1')
+        
+        # Filtros do etl_listagem
+        df_cvm = df_cvm[(df_cvm["TP_MERC"] == "BOLSA") & (df_cvm["SIT"] == "ATIVO")].copy()
+        
         df_cvm['cnpj'] = df_cvm['CNPJ_CIA'].apply(normalizar_cnpj)
         df_cvm = df_cvm.dropna(subset=['cnpj', 'CD_CVM'])
         df_cvm['cd_cvm'] = df_cvm['CD_CVM'].astype(int)
+        df_cvm['data_registro_cvm'] = pd.to_datetime(df_cvm['DT_REG'], format="%Y-%m-%d", errors="coerce")
         
-        df_cvm = df_cvm[['cnpj', 'cd_cvm']].drop_duplicates(subset='cnpj')
-        print(f"   ✅ {len(df_cvm)} CNPJs mapeados para CD_CVM.")
+        df_cvm = df_cvm[['cnpj', 'cd_cvm', 'data_registro_cvm']].drop_duplicates(subset='cnpj')
+        print(f"   ✅ {len(df_cvm)} CNPJs mapeados para CD_CVM e Data Registro.")
         return df_cvm
     except Exception as e:
         print(f"   ❌ Erro ao baixar CVM: {e}")
-        return pd.DataFrame(columns=['cnpj', 'cd_cvm'])
+        return pd.DataFrame(columns=['cnpj', 'cd_cvm', 'data_registro_cvm'])
 
 def buscar_fre_mais_recente():
     ano = datetime.now().year
@@ -199,7 +204,7 @@ def main():
                 lambda x: root_map.get(x[:4]) if pd.notna(x) else None
             )
         
-        # Merge com CVM (cd_cvm)
+        # Merge com CVM (cd_cvm e data_registro_cvm)
         df_final = df_final.merge(df_cvm, on="cnpj", how="left")
         
         # Merge com FRE (Totais e Circulação)
@@ -225,7 +230,7 @@ def main():
         colunas_finais = [
             "ticker", "nome", "setor", "subsetor", "segmento",
             "quantidade_acoes", "cnpj", "cd_cvm", "qtd_acoes_totais",
-            "qtd_acoes_circulacao", "pct_free_float", "ativo"
+            "qtd_acoes_circulacao", "pct_free_float", "data_registro_cvm", "ativo"
         ]
         df_final = df_final[colunas_finais]
         
@@ -241,6 +246,8 @@ def main():
                     valor = None
                 elif str(df_final[col].dtype) == "Int64":
                     valor = int(valor)
+                elif isinstance(valor, pd.Timestamp):
+                    valor = valor.strftime("%Y-%m-%d") # Formata data para string
                 registro[col] = valor
             registros.append(registro)
             
