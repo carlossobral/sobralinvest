@@ -76,7 +76,7 @@ def main():
         "receita_liquida_q", "lucro_bruto_q", "ebit_q", "ebitda_q", "lucro_liquido_q",
         "ativo_total", "ativo_circulante", "passivo_circulante", "patrimonio_liquido", 
         "caixa", "divida_bruta", "divida_liquida", "quantidade_acoes", "ano", "trimestre",
-        "despesa_financeira_ytd", "despesa_financeira_q" # NOVO
+        "despesa_financeira_ytd", "despesa_financeira_q"
     ]
     for col in num_cols:
         if col in df_fund.columns: df_fund[col] = pd.to_numeric(df_fund[col], errors="coerce")
@@ -88,7 +88,7 @@ def main():
     ltm_map = {
         'receita_liquida_q': 'receita_liquida_ltm', 'lucro_bruto_q': 'lucro_bruto_ltm',
         'ebit_q': 'ebit_ltm', 'ebitda_q': 'ebitda_ltm', 'lucro_liquido_q': 'lucro_liquido_ltm',
-        'despesa_financeira_q': 'despesa_financeira_ltm' # NOVO
+        'despesa_financeira_q': 'despesa_financeira_ltm'
     }
     for q_col, ltm_col in ltm_map.items():
         df_fund[ltm_col] = df_fund.groupby('ticker')[q_col].rolling(window=4, min_periods=1).sum().reset_index(level=0, drop=True)
@@ -107,7 +107,13 @@ def main():
     df_fund = df_fund.merge(df_t4[['ticker', 'ano', 'cagr_receita_5a', 'cagr_lucro_5a']], on=['ticker', 'ano'], how='left')
     
     df_emp["qtd_acoes_totais"] = pd.to_numeric(df_emp["qtd_acoes_totais"], errors="coerce")
+    # Remover duplicatas de empresas antes do merge para não multiplicar linhas
+    df_emp = df_emp.drop_duplicates(subset=['ticker'], keep='last')
+    
     df_fund = df_fund.merge(df_emp[['ticker', 'segmento', 'qtd_acoes_totais']], on='ticker', how='left')
+    
+    # Garantir que não há duplicatas histórico antes de processar
+    df_fund = df_fund.drop_duplicates(subset=['ticker', 'data_referencia'], keep='last')
     
     # Prep Cotações
     df_cot["data"] = pd.to_datetime(df_cot["data"])
@@ -201,7 +207,7 @@ def main():
         ebit_ltm = safe_float(t("ebit_ltm"))
         ebitda_ltm = safe_float(t("ebitda_ltm"))
         lb_ltm = safe_float(t("lucro_bruto_ltm"))
-        desp_fin_ltm = safe_float(t("despesa_financeira_ltm")) # NOVO
+        desp_fin_ltm = safe_float(t("despesa_financeira_ltm"))
         
         rec_q = safe_float(t("receita_liquida_q"))
         lb_q = safe_float(t("lucro_bruto_q"))
@@ -262,8 +268,8 @@ def main():
             "div_liq_pl": sd(div_liq, pl),
             "div_liq_ebit": div_liq_ebit_val,
             "div_liq_ebitda": div_liq_ebitda_val,
-            "payout": payout, # NOVO
-            "cobertura_juros": cobertura_juros, # NOVO
+            "payout": payout,
+            "cobertura_juros": cobertura_juros,
             "cagr_receita_5a": safe_float(t("cagr_receita_5a")),
             "cagr_lucro_5a": safe_float(t("cagr_lucro_5a")),
             "receita_liquida": rec_ltm,
@@ -291,6 +297,12 @@ def main():
         registros_saida.append(limpar_registro(rec_dict))
 
     print(f"Salvando {len(registros_saida)} registros no Supabase...")
+    
+    # Limpeza final para evitar o erro de ON CONFLICT no banco
+    df_saida = pd.DataFrame(registros_saida)
+    if not df_saida.empty:
+        df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_balanco'], keep='last')
+        registros_saida = df_saida.to_dict('records')
 
     lote = 500
     erros = 0
