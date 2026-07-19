@@ -16,6 +16,7 @@ MAPEAMENTO_DRE = {
     'receita_liquida': r'^3\.01$',
     'custo':           r'^3\.02$',
     'ebit':            r'^3\.05$',
+    'despesa_financeira': r'^3\.06\.02$',  # <--- NOVO: Despesas Financeiras
 }
 
 MAPEAMENTO_BPA = {
@@ -27,7 +28,8 @@ MAPEAMENTO_BPP = {
     'passivo_circulante': r'^2\.01$',
 }
 
-COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido']
+# Adicionado 'despesa_financeira' na lista para gerar _ytd e _q
+COLUNAS_DRE = ['receita_liquida', 'custo', 'lucro_bruto', 'ebit', 'ebitda', 'lucro_liquido', 'despesa_financeira']
 COLUNAS_BAL = ['ativo_total', 'ativo_circulante', 'passivo_circulante',
                'patrimonio_liquido', 'caixa', 'divida_bruta', 'divida_liquida', 'passivo_total']
 
