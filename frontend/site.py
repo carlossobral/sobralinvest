@@ -2,6 +2,8 @@ import os
 import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
+from dotenv import load_dotenv
+from pathlib import Path
 
 # ==========================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CONEXÃO SUPABASE
@@ -20,11 +22,17 @@ st.markdown(hide_menu_style, unsafe_allow_html=True)
 
 @st.cache_resource
 def init_supabase():
+    # Carrega o .env que está duas pastas acima (na raiz do projeto)
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    load_dotenv(dotenv_path=env_path)
+    
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_KEY")
+    
     if not url or not key:
-        st.error("Credenciais do Supabase não encontradas nas variáveis de ambiente.")
+        st.error(f"Não encontrei o .env em {env_path}. Verifique se as variáveis SUPABASE_URL e SUPABASE_KEY estão lá.")
         st.stop()
+        
     return create_client(url, key)
 
 supabase = init_supabase()
