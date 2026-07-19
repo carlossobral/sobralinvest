@@ -1,14 +1,17 @@
 """
-ETL - Score CS 2.0
+ETL - Sobral Score 3.0
 
 Calcula o Score CS para todas as empresas.
 
 Fluxo:
 indicadores + empresas + metricas_score + dividendos = score
 Regras:
+- Dividendos: Histórico (8) + DY Atual (6) + Payout (6).
+- Rentabilidade: Inversão ROIC(10)/ROE(7). Penalidade por diferença (Alavancagem). Fator 0.8 se Marg. Liq > Marg. EBIT.
+- Segurança: DL/EBITDA + Cobertura de Juros + Liquidez. Zera se DL > 4x ou Cobertura < 2x.
+- Bancos/Seguradoras: Segurança = 0. Pesos redistribuídos.
 - Se setor < 3 empresas, usa mediana do mercado geral.
 - Se anos_listagem for NULL, usa a quantidade de anos de balanço no banco (Proxy).
-- Correção de decimais: Indicadores são salvos em formato decimal (0.15) e multiplicados por 100 para a pontuação.
 """
 
 import pandas as pd
@@ -84,12 +87,10 @@ ano_atual = datetime.now().year
 anos_disponiveis = [a for a in sorted(hist_roe_df["ano"].unique(), reverse=True) if a < ano_atual][:5]
 hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
 
-# CORREÇÃO: O ROE no banco é decimal (ex: 0.10 para 10%). A comparação deve ser >= 0.10
 hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 0.10
 consistencia_roe = hist_roe_df.groupby('ticker')['roe_10'].sum().reset_index()
 consistencia_roe.columns = ['ticker', 'anos_roe_10']
 
-# Proxy de Listagem: Conta quantos anos únicos de balanço a empresa tem no banco
 proxy_listagem = hist_roe_df.groupby('ticker')['ano'].nunique().reset_index()
 proxy_listagem.columns = ['ticker', 'anos_hist_banco']
 
@@ -135,23 +136,24 @@ mkt_medians = df.groupby('data_balanco').agg(
 df = df.merge(mkt_medians, on='data_balanco', how='left')
 
 # ==========================================================
-# 4. FUNÇÕES SCORE E FILTROS
+# 4. FUNÇÕES SCORE 3.0 E FILTROS
 # ==========================================================
-def score_roe(val):
-    if pd.isna(val): return 0
-    if val >= 25: return 10
-    if val >= 20: return 8
-    if val >= 15: return 6
-    if val >= 10: return 4
-    if val >= 5: return 2
-    return 0
 
+# --- RENTABILIDADE (25 base) ---
 def score_roic(val):
     if pd.isna(val): return 0
-    if val >= 20: return 7
-    if val >= 15: return 5
-    if val >= 10: return 3
-    if val >= 5: return 1
+    if val >= 20: return 10
+    if val >= 15: return 8
+    if val >= 10: return 6
+    if val >= 5: return 3
+    return 0
+
+def score_roe(val):
+    if pd.isna(val): return 0
+    if val >= 25: return 7
+    if val >= 20: return 5
+    if val >= 15: return 4
+    if val >= 10: return 2
     return 0
 
 def score_margem(val):
@@ -168,6 +170,7 @@ def score_consistencia_roe(anos):
     if anos == 3: return 1
     return 0
 
+# --- CRESCIMENTO (25 base) ---
 def score_cagr_receita(val):
     if pd.isna(val): return 0
     if val >= 20: return 12
@@ -186,12 +189,12 @@ def score_cagr_lucro(val):
     if val >= 0: return 2
     return 0
 
+# --- SEGURANÇA (20 base) ---
 def score_divida(val):
     if pd.isna(val): return 0
-    if val <= 0: return 15
-    if val <= 1: return 13
-    if val <= 2: return 10
-    if val <= 3: return 6
+    if val <= 1: return 10
+    if val <= 2: return 8
+    if val <= 3: return 5
     if val <= 4: return 2
     return 0
 
@@ -204,6 +207,14 @@ def score_liquidez(val):
     if val >= 0.5: return 1
     return 0
 
+def score_cobertura_juros(val):
+    if pd.isna(val): return 0
+    if val >= 5.0: return 5
+    if val >= 3.0: return 4
+    if val >= 2.0: return 2
+    return 0
+
+# --- DIVIDENDOS (20 base) ---
 def score_hist_div(anos):
     if anos >= 6: return 8
     if anos == 5: return 6
@@ -213,21 +224,23 @@ def score_hist_div(anos):
 
 def score_dy_atual(val):
     if pd.isna(val): return 0
-    if val >= 8: return 5
-    if val >= 6: return 4
-    if val >= 4: return 3
+    if val >= 8: return 6
+    if val >= 6: return 5
+    if val >= 4: return 4
+    if val >= 3: return 3
     if val >= 2: return 2
     return 0
 
-def score_dy_medio(val):
+def score_payout(val):
     if pd.isna(val): return 0
-    if val >= 8: return 7
-    if val >= 6: return 6
-    if val >= 5: return 5
-    if val >= 4: return 3
-    if val >= 2: return 1
-    return 0
+    if val > 1.0: return 0        # > 100%
+    if val < 0.2: return 0        # < 20%
+    if val > 0.9: return 2        # > 90% e <= 100%
+    if val >= 0.75: return 4      # 75% a 90%
+    if val < 0.30: return 4       # 20% a 30%
+    return 6                      # 30% a 75% (Ideal)
 
+# --- VALUATION (10 base) ---
 def score_pl_rel(val, med):
     if pd.isna(val) or val <= 0 or pd.isna(med) or med <= 0: return 0
     return 3 if val < med else 0
@@ -238,7 +251,7 @@ def score_pvp_rel(val, med):
 
 def score_ev_ebit_rel(val, med):
     if pd.isna(val) or val <= 0 or pd.isna(med) or med <= 0: return 0
-    return 2 if val < med else 0
+    return 4 if val < med else 0 # Ajustado para totalizar 10
 
 def eh_financeiro(segmento, ticker):
     if pd.isna(segmento): return False
@@ -249,52 +262,67 @@ def eh_financeiro(segmento, ticker):
     return is_banco or is_seguradora
 
 def bonus_listagem(anos_listagem, anos_hist_banco):
-    # Se a empresa tem registro da CVM e calculou os anos, usa isso
     if not pd.isna(anos_listagem) and float(anos_listagem) >= 5:
         return 1
-    # FALLBACK: Se a CVM não enviou a data, mas a empresa tem +5 anos de balanços no banco
     elif pd.isna(anos_listagem) and anos_hist_banco >= 5:
         return 1
     return 0
 
 # ==========================================================
-# 5. CALCULAR SCORE
+# 5. CALCULAR SCORE 3.0
 # ==========================================================
-print("Calculando Score CS...")
+print("Calculando Score CS 3.0...")
 
 resultados = []
 
 for _, row in df.iterrows():
     is_banco = eh_financeiro(row.get("segmento"), row.get("ticker"))
     
-    # CORREÇÃO: Multiplicar por 100 para bater com as funções de Score (que esperam 15, 20, 25, etc)
     roe_val = row["roe"] * 100 if pd.notna(row["roe"]) else None
     roic_val = row["roic"] * 100 if pd.notna(row["roic"]) else None
-    margem_val = row["margem_liquida"] * 100 if pd.notna(row["margem_liquida"]) else None
+    margem_liq_val = row["margem_liquida"] * 100 if pd.notna(row["margem_liquida"]) else None
+    margem_ebit_val = row["margem_ebit"] * 100 if pd.notna(row["margem_ebit"]) else None
     cagr_rec_val = row["cagr_receita_5a"] * 100 if pd.notna(row["cagr_receita_5a"]) else None
     cagr_luc_val = row["cagr_lucro_5a"] * 100 if pd.notna(row["cagr_lucro_5a"]) else None
     dy_atual_val = row["dy_atual"] * 100 if pd.notna(row["dy_atual"]) else None
     
-    # O dividendos_6a_media atualmente é o valor absoluto (R$). 
-    # Para dar a pontuação correta, dividimos pelo preço (que não está mais na tabela, mas podemos usar o LPA ou VPA como aproximação? 
-    # Não. Para não quebrar agora, vamos manter a função recebendo o valor absoluto multiplicado por 100 só para não zerar, 
-    # mas na verdade precisaremos corrigir o etl_indicadores para salvar o DY de 6 anos médio (percentual) e não o valor em R$.
-    dy_medio_val = row["dividendos_6a_media"] * 100 if pd.notna(row["dividendos_6a_media"]) else None
-    
     # 1. RENTABILIDADE (25 base)
     rentabilidade = (
-        score_roe(roe_val) + score_roic(roic_val) +
-        score_margem(margem_val) + score_consistencia_roe(row["anos_roe_10"])
+        score_roic(roic_val) + score_roe(roe_val) +
+        score_margem(margem_liq_val) + score_consistencia_roe(row["anos_roe_10"])
     )
+    
+    # Penalidade Alavancagem (Diferença ROE - ROIC)
+    if pd.notna(roe_val) and pd.notna(roic_val):
+        diff_roe_roic = roe_val - roic_val
+        if diff_roe_roic > 15:
+            rentabilidade *= 0.70
+        elif diff_roe_roic > 5:
+            rentabilidade *= 0.85
+            
+    # Fator Lucro Sujo (Margem Líquida > Margem EBIT)
+    if pd.notna(margem_liq_val) and pd.notna(margem_ebit_val) and margem_liq_val > margem_ebit_val:
+        rentabilidade *= 0.80
+    
+    rentabilidade = round(rentabilidade, 2)
     
     # 2. CRESCIMENTO (25 base)
     crescimento = score_cagr_receita(cagr_rec_val) + score_cagr_lucro(cagr_luc_val)
     
     # 3. SEGURANÇA (20 base / 0 para financeiros)
-    seguranca = 0 if is_banco else score_divida(row["div_liq_ebitda"]) + score_liquidez(row["liquidez_corrente"])
+    if is_banco:
+        seguranca = 0
+    else:
+        div_ebitda = row.get("div_liq_ebitda")
+        cob_juros = row.get("cobertura_juros")
+        
+        if (pd.notna(div_ebitda) and div_ebitda > 4) or (pd.notna(cob_juros) and cob_juros < 2):
+            seguranca = 0
+        else:
+            seguranca = score_divida(div_ebitda) + score_liquidez(row["liquidez_corrente"]) + score_cobertura_juros(cob_juros)
         
     # 4. DIVIDENDOS (20 base)
-    dividendos = score_hist_div(row["anos_div_pagos"]) + score_dy_atual(dy_atual_val) + score_dy_medio(dy_medio_val)
+    dividendos = score_hist_div(row["anos_div_pagos"]) + score_dy_atual(dy_atual_val) + score_payout(row.get("payout"))
     
     # 5. VALUATION (10 base) E BÔNUS ROE/ROIC
     n_emp_setor = row.get("empresas_setor")
@@ -310,7 +338,6 @@ for _, row in df.iterrows():
         score_ev_ebit_rel(row["ev_ebit"], ev_ebit_med)
     )
     
-    # Bônus ROE e ROIC (Separado do Pilar Valuation)
     bonus_roe = 0
     bonus_roe += (1 if not pd.isna(row["roe"]) and not pd.isna(roe_med) and row["roe"] > roe_med else 0)
     bonus_roe += (1 if not pd.isna(row["roic"]) and not pd.isna(roic_med) and row["roic"] > roic_med else 0)
@@ -328,7 +355,6 @@ for _, row in df.iterrows():
     score_cs = rentabilidade + crescimento + seguranca + dividendos + valuation + bonus_roe + b_listagem
     score_cs = min(103, max(0, score_cs))
     
-    # Limpeza de NaN para evitar erro no JSON do Supabase
     def clean_val(v):
         if pd.isna(v): return None
         return float(v)
@@ -369,4 +395,4 @@ for i in range(0, len(resultado_df), lote):
         erros += 1
         print(f"  Erro no lote {i}: {e}")
 
-print(f"✅ Score CS atualizado com sucesso. {salvos} registros processados, {erros} lotes com erro.")
+print(f"✅ Score CS 3.0 atualizado com sucesso. {salvos} registros processados, {erros} lotes com erro.")
