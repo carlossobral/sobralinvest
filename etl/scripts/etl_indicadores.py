@@ -298,24 +298,28 @@ def main():
 
     print(f"Salvando {len(registros_saida)} registros no Supabase...")
     
-    # Limpeza final para evitar o erro de ON CONFLICT no banco
+    # Limpeza final para evitar o erro de ON CONFLICT e NaN no banco
     df_saida = pd.DataFrame(registros_saida)
     if not df_saida.empty:
         df_saida = df_saida.drop_duplicates(subset=['ticker', 'data_balanco'], keep='last')
+        # Converte de volta para lista
         registros_saida = df_saida.to_dict('records')
 
     lote = 500
     erros = 0
     salvos = 0
     for i in range(0, len(registros_saida), lote):
+        lote_atual = registros_saida[i: i + lote]
+        # APLICA A LIMPEZA DE NaN NOVAMENTE ANTES DE ENVIAR PARA O BANCO
+        lote_limpo = [limpar_registro(r) for r in lote_atual]
         try:
-            supabase.table("indicadores").upsert(registros_saida[i: i + lote], on_conflict="ticker,data_balanco").execute()
-            salvos += len(registros_saida[i: i + lote])
+            supabase.table("indicadores").upsert(
+                lote_limpo, 
+                on_conflict="ticker,data_balanco"
+            ).execute()
+            salvos += len(lote_atual)
         except Exception as e:
             erros += 1
             print(f"  Erro no lote {i}: {e}")
 
     print(f"Concluido. {salvos} registros salvos, {erros} lotes com erro.")
-
-if __name__ == "__main__":
-    main()
