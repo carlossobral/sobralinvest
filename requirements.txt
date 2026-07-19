@@ -1,0 +1,6 @@
+supabase
+pandas
+numpy
+httpx
+openpyxl
+python-dotenv
