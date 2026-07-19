@@ -7,10 +7,10 @@ from etl.database.supabase_client import supabase
 TAXA_IMPOSTO = 0.34
 
 # Controle de Anos (Igual ao etl_fundamentos_cvm)
-#ANO_FINAL = 2026
-#ANO_INICIAL = 2015
-ANO_FINAL = datetime.now().year
-ANO_INICIAL = ANO_FINAL - 1
+ANO_FINAL = 2026
+ANO_INICIAL = 2015
+#ANO_FINAL = datetime.now().year
+#ANO_INICIAL = ANO_FINAL - 1
 
 def safe_float(v):
     try:
@@ -104,7 +104,17 @@ def main():
     mask_luc = (df_t4["luc_5a_ago"] > 0) & (df_t4["lucro_liquido_ytd"].notna())
     df_t4['cagr_receita_5a'] = np.where(mask_rec, (df_t4['receita_liquida_ytd'] / df_t4['rec_5a_ago']) ** (1/5) - 1, np.nan)
     df_t4['cagr_lucro_5a'] = np.where(mask_luc, (df_t4['lucro_liquido_ytd'] / df_t4['luc_5a_ago']) ** (1/5) - 1, np.nan)
-    df_fund = df_fund.merge(df_t4[['ticker', 'ano', 'cagr_receita_5a', 'cagr_lucro_5a']], on=['ticker', 'ano'], how='left')
+    
+    # CORREÇÃO CAGR: Em vez de merge por ano, ordenamos e usamos ffill para preencher os trimestres seguintes
+    df_t4 = df_t4.sort_values(['ticker', 'data_referencia'])
+    df_t4['cagr_receita_5a'] = df_t4.groupby('ticker')['cagr_receita_5a'].ffill()
+    df_t4['cagr_lucro_5a'] = df_t4.groupby('ticker')['cagr_lucro_5a'].ffill()
+    
+    # Merge pela data de referência exata (4T) e depois ffill no df_fund completo
+    df_fund = df_fund.sort_values(['ticker', 'data_referencia'])
+    df_fund = df_fund.merge(df_t4[['ticker', 'data_referencia', 'cagr_receita_5a', 'cagr_lucro_5a']], on=['ticker', 'data_referencia'], how='left')
+    df_fund['cagr_receita_5a'] = df_fund.groupby('ticker')['cagr_receita_5a'].ffill()
+    df_fund['cagr_lucro_5a'] = df_fund.groupby('ticker')['cagr_lucro_5a'].ffill()
     
     df_emp["qtd_acoes_totais"] = pd.to_numeric(df_emp["qtd_acoes_totais"], errors="coerce")
     # Remover duplicatas de empresas antes do merge para não multiplicar linhas
@@ -323,5 +333,6 @@ def main():
             print(f"  Erro no lote {i}: {e}")
 
     print(f"Concluido. {salvos} registros salvos, {erros} lotes com erro.")
+
 if __name__ == "__main__":
     main()
