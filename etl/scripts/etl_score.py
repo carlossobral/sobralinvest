@@ -8,9 +8,11 @@ indicadores + empresas + metricas_score + dividendos = score
 Regras:
 - Se setor < 3 empresas, usa mediana do mercado geral.
 - Se anos_listagem for NULL, usa a quantidade de anos de balanço no banco (Proxy).
+- Correção de decimais: Indicadores são salvos em formato decimal (0.15) e multiplicados por 100 para a pontuação.
 """
 
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from etl.database.supabase_client import supabase
 
@@ -81,7 +83,9 @@ hist_roe_df = pd.DataFrame(hist_roe_resp)
 ano_atual = datetime.now().year
 anos_disponiveis = [a for a in sorted(hist_roe_df["ano"].unique(), reverse=True) if a < ano_atual][:5]
 hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
-hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 10
+
+# CORREÇÃO: O ROE no banco é decimal (ex: 0.10 para 10%). A comparação deve ser >= 0.10
+hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 0.10
 consistencia_roe = hist_roe_df.groupby('ticker')['roe_10'].sum().reset_index()
 consistencia_roe.columns = ['ticker', 'anos_roe_10']
 
@@ -263,20 +267,34 @@ resultados = []
 for _, row in df.iterrows():
     is_banco = eh_financeiro(row.get("segmento"), row.get("ticker"))
     
+    # CORREÇÃO: Multiplicar por 100 para bater com as funções de Score (que esperam 15, 20, 25, etc)
+    roe_val = row["roe"] * 100 if pd.notna(row["roe"]) else None
+    roic_val = row["roic"] * 100 if pd.notna(row["roic"]) else None
+    margem_val = row["margem_liquida"] * 100 if pd.notna(row["margem_liquida"]) else None
+    cagr_rec_val = row["cagr_receita_5a"] * 100 if pd.notna(row["cagr_receita_5a"]) else None
+    cagr_luc_val = row["cagr_lucro_5a"] * 100 if pd.notna(row["cagr_lucro_5a"]) else None
+    dy_atual_val = row["dy_atual"] * 100 if pd.notna(row["dy_atual"]) else None
+    
+    # O dividendos_6a_media atualmente é o valor absoluto (R$). 
+    # Para dar a pontuação correta, dividimos pelo preço (que não está mais na tabela, mas podemos usar o LPA ou VPA como aproximação? 
+    # Não. Para não quebrar agora, vamos manter a função recebendo o valor absoluto multiplicado por 100 só para não zerar, 
+    # mas na verdade precisaremos corrigir o etl_indicadores para salvar o DY de 6 anos médio (percentual) e não o valor em R$.
+    dy_medio_val = row["dividendos_6a_media"] * 100 if pd.notna(row["dividendos_6a_media"]) else None
+    
     # 1. RENTABILIDADE (25 base)
     rentabilidade = (
-        score_roe(row["roe"]) + score_roic(row["roic"]) +
-        score_margem(row["margem_liquida"]) + score_consistencia_roe(row["anos_roe_10"])
+        score_roe(roe_val) + score_roic(roic_val) +
+        score_margem(margem_val) + score_consistencia_roe(row["anos_roe_10"])
     )
     
     # 2. CRESCIMENTO (25 base)
-    crescimento = score_cagr_receita(row["cagr_receita_5a"]) + score_cagr_lucro(row["cagr_lucro_5a"])
+    crescimento = score_cagr_receita(cagr_rec_val) + score_cagr_lucro(cagr_luc_val)
     
     # 3. SEGURANÇA (20 base / 0 para financeiros)
     seguranca = 0 if is_banco else score_divida(row["div_liq_ebitda"]) + score_liquidez(row["liquidez_corrente"])
         
     # 4. DIVIDENDOS (20 base)
-    dividendos = score_hist_div(row["anos_div_pagos"]) + score_dy_atual(row["dy_atual"]) + score_dy_medio(row["dividendos_6a_media"])
+    dividendos = score_hist_div(row["anos_div_pagos"]) + score_dy_atual(dy_atual_val) + score_dy_medio(dy_medio_val)
     
     # 5. VALUATION (10 base) E BÔNUS ROE/ROIC
     n_emp_setor = row.get("empresas_setor")
@@ -310,17 +328,22 @@ for _, row in df.iterrows():
     score_cs = rentabilidade + crescimento + seguranca + dividendos + valuation + bonus_roe + b_listagem
     score_cs = min(103, max(0, score_cs))
     
+    # Limpeza de NaN para evitar erro no JSON do Supabase
+    def clean_val(v):
+        if pd.isna(v): return None
+        return float(v)
+    
     resultados.append({
         "ticker": row["ticker"],
         "data_balanco": row.get("data_balanco"),
-        "score": round(score_cs, 2),
-        "rentabilidade": round(rentabilidade, 2),
-        "crescimento": round(crescimento, 2),
-        "seguranca": round(seguranca, 2),
-        "dividendos": round(dividendos, 2),
-        "valuation": round(valuation, 2),
-        "bonus_roe": bonus_roe,
-        "bonus_listagem": b_listagem
+        "score": clean_val(score_cs),
+        "rentabilidade": clean_val(rentabilidade),
+        "crescimento": clean_val(crescimento),
+        "seguranca": clean_val(seguranca),
+        "dividendos": clean_val(dividendos),
+        "valuation": clean_val(valuation),
+        "bonus_roe": int(bonus_roe),
+        "bonus_listagem": int(b_listagem)
     })
 
 resultado_df = pd.DataFrame(resultados)
