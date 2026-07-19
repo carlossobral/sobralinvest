@@ -7,10 +7,10 @@ from etl.database.supabase_client import supabase
 TAXA_IMPOSTO = 0.34
 
 # Controle de Anos (Igual ao etl_fundamentos_cvm)
-#ANO_FINAL = 2026
-#ANO_INICIAL = 2015
-ANO_FINAL = datetime.now().year
-ANO_INICIAL = ANO_FINAL - 1
+ANO_FINAL = 2026
+ANO_INICIAL = 2015
+#ANO_FINAL = datetime.now().year
+#ANO_INICIAL = ANO_FINAL - 1
 
 def safe_float(v):
     try:
@@ -48,7 +48,7 @@ def main():
         
     df_emp = pd.DataFrame(supabase.table("empresas").select("ticker, segmento, qtd_acoes_totais").execute().data)
     
-    # 2. Buscar Cotações (Traz tudo para ter o histórico e o preço de hoje)
+    # 2. Buscar Cotações
     cot_data = []
     offset = 0
     while True:
@@ -76,6 +76,7 @@ def main():
         "receita_liquida_q", "lucro_bruto_q", "ebit_q", "ebitda_q", "lucro_liquido_q",
         "ativo_total", "ativo_circulante", "passivo_circulante", "patrimonio_liquido", 
         "caixa", "divida_bruta", "divida_liquida", "quantidade_acoes", "ano", "trimestre",
+        "despesa_financeira_ytd", "despesa_financeira_q" # NOVO
     ]
     for col in num_cols:
         if col in df_fund.columns: df_fund[col] = pd.to_numeric(df_fund[col], errors="coerce")
@@ -86,7 +87,8 @@ def main():
     # LTM e PL 1 ano atrás
     ltm_map = {
         'receita_liquida_q': 'receita_liquida_ltm', 'lucro_bruto_q': 'lucro_bruto_ltm',
-        'ebit_q': 'ebit_ltm', 'ebitda_q': 'ebitda_ltm', 'lucro_liquido_q': 'lucro_liquido_ltm'
+        'ebit_q': 'ebit_ltm', 'ebitda_q': 'ebitda_ltm', 'lucro_liquido_q': 'lucro_liquido_ltm',
+        'despesa_financeira_q': 'despesa_financeira_ltm' # NOVO
     }
     for q_col, ltm_col in ltm_map.items():
         df_fund[ltm_col] = df_fund.groupby('ticker')[q_col].rolling(window=4, min_periods=1).sum().reset_index(level=0, drop=True)
@@ -113,7 +115,6 @@ def main():
     df_cot["volume"] = pd.to_numeric(df_cot["volume"], errors="coerce").fillna(0)
     df_cot["volume_financeiro"] = df_cot["volume"] * df_cot["fechamento"]
     
-    # Dicionário de Cotações para busca rápida
     cot_dict = {}
     for t, g in df_cot.groupby('ticker'):
         g = g.sort_values('data')
@@ -123,12 +124,11 @@ def main():
             'vol': g['volume_financeiro'].rolling(window=30, min_periods=1).mean().values
         }
         
-    # Última cotação global (para a Janela Móvel)
     ult_cotacao = df_cot.sort_values('data').drop_duplicates('ticker', keep='last').set_index('ticker')
 
     # Prep Dividendos
     if not df_div.empty:
-        df_div["data_pagamento"] = pd.to_datetime(df_div["data_pagamento"], errors="coerce")
+        df_div["data_pagamento"] = pd.to_datetime(df_div["data_pagamento"])
         df_div["valor"] = pd.to_numeric(df_div["valor"], errors="coerce").fillna(0)
         div_grouped = {t: g for t, g in df_div.groupby('ticker')}
     else:
@@ -201,6 +201,7 @@ def main():
         ebit_ltm = safe_float(t("ebit_ltm"))
         ebitda_ltm = safe_float(t("ebitda_ltm"))
         lb_ltm = safe_float(t("lucro_bruto_ltm"))
+        desp_fin_ltm = safe_float(t("despesa_financeira_ltm")) # NOVO
         
         rec_q = safe_float(t("receita_liquida_q"))
         lb_q = safe_float(t("lucro_bruto_q"))
@@ -213,6 +214,10 @@ def main():
         
         lpa = sd(ll_ltm, qty_total)
         vpa = sd(pl, qty_total)
+        
+        # NOVOS INDICADORES
+        payout = sd(div12m, lpa) if lpa and lpa > 0 else None
+        cobertura_juros = sd(abs(ebit_ltm), abs(desp_fin_ltm)) if ebit_ltm and desp_fin_ltm and desp_fin_ltm != 0 else None
         
         cap_giro = (ac - pc) if (ac is not None and pc is not None) else None
         cap_inv = (pl + div_liq) if pl is not None else None
@@ -257,6 +262,8 @@ def main():
             "div_liq_pl": sd(div_liq, pl),
             "div_liq_ebit": div_liq_ebit_val,
             "div_liq_ebitda": div_liq_ebitda_val,
+            "payout": payout, # NOVO
+            "cobertura_juros": cobertura_juros, # NOVO
             "cagr_receita_5a": safe_float(t("cagr_receita_5a")),
             "cagr_lucro_5a": safe_float(t("cagr_lucro_5a")),
             "receita_liquida": rec_ltm,
