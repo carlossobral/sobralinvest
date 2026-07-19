@@ -4,3 +4,4 @@ numpy
 httpx
 openpyxl
 python-dotenv
+pydantic-settings
