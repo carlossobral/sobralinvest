@@ -323,3 +323,5 @@ def main():
             print(f"  Erro no lote {i}: {e}")
 
     print(f"Concluido. {salvos} registros salvos, {erros} lotes com erro.")
+if __name__ == "__main__":
+    main()
