@@ -1,0 +1,53 @@
+name: ETL Diário Sobral Invest
+
+on:
+  schedule:
+    # Roda todos os dias à meia-noite e meia (00:30 UTC = 21:30 horário de Brasília)
+    - cron: '30 4 * * *'
+  workflow_dispatch: # Permite rodar manualmente pelo site do GitHub
+
+jobs:
+  run-etl:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Baixar código do repositório
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 📦 Instalar UV e Dependências
+        run: |
+          pip install uv
+          uv pip install --system -r requirements.txt # Certifique-se de ter um requirements.txt ou ajuste para pyproject.toml
+
+      - name: 🚀 Executar Esteira de ETLs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          echo "Iniciando ETL Empresas..."
+          python -m etl.scripts.etl_empresas
+          
+          echo "Iniciando ETL Cotações..."
+          python -m etl.scripts.etl_cotacoes
+          
+          echo "Iniciando ETL Dividendos..."
+          python -m etl.scripts.etl_dividendos
+          
+          echo "Iniciando ETL Fundamentos CVM..."
+          python -m etl.scripts.etl_fundamentos_cvm
+          
+          echo "Iniciando Cálculo de Indicadores..."
+          python -m etl.scripts.etl_indicadores
+          
+          echo "Iniciando Métricas Setoriais..."
+          python -m etl.scripts.etl_metricas_setor
+          
+          echo "Iniciando Cálculo do Score CS 2.0..."
+          python -m etl.scripts.etl_score
+          
+          echo "✅ Esteira concluída com sucesso!"
