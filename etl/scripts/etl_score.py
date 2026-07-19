@@ -5,7 +5,9 @@ Calcula o Score CS para todas as empresas.
 
 Fluxo:
 indicadores + empresas + metricas_score + dividendos = score
-Regra: Se setor < 3 empresas, usa mediana do mercado geral.
+Regras:
+- Se setor < 3 empresas, usa mediana do mercado geral.
+- Se anos_listagem for NULL, usa a quantidade de anos de balanço no banco (Proxy).
 """
 
 import pandas as pd
@@ -83,6 +85,10 @@ hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 10
 consistencia_roe = hist_roe_df.groupby('ticker')['roe_10'].sum().reset_index()
 consistencia_roe.columns = ['ticker', 'anos_roe_10']
 
+# Proxy de Listagem: Conta quantos anos únicos de balanço a empresa tem no banco
+proxy_listagem = hist_roe_df.groupby('ticker')['ano'].nunique().reset_index()
+proxy_listagem.columns = ['ticker', 'anos_hist_banco']
+
 print("Calculando histórico de dividendos (6 anos completos)...")
 if not dividendos_df.empty:
     dividendos_df['data_pagamento'] = pd.to_datetime(dividendos_df['data_pagamento'])
@@ -106,9 +112,11 @@ df = indicadores_df.merge(empresas_df, on="ticker", how="left")
 df = df.merge(metricas_df, on=["setor", "data_balanco"], how="left")
 df = df.merge(consistencia_roe, on="ticker", how="left")
 df = df.merge(hist_div, on="ticker", how="left")
+df = df.merge(proxy_listagem, on="ticker", how="left")
 
 df['anos_roe_10'] = df['anos_roe_10'].fillna(0).astype(int)
 df['anos_div_pagos'] = df['anos_div_pagos'].fillna(0).astype(int)
+df['anos_hist_banco'] = df['anos_hist_banco'].fillna(0).astype(int)
 
 def med_pos(serie):
     s = pd.to_numeric(serie, errors='coerce').dropna()
@@ -236,10 +244,14 @@ def eh_financeiro(segmento, ticker):
     is_seguradora = seg == "Seguradoras" or tk in ['WIZC3', 'CXSE3', 'BBSE3']
     return is_banco or is_seguradora
 
-def bonus_listagem(anos):
-    if pd.isna(anos): return 0
-    try: return 1 if float(anos) >= 5 else 0
-    except: return 0
+def bonus_listagem(anos_listagem, anos_hist_banco):
+    # Se a empresa tem registro da CVM e calculou os anos, usa isso
+    if not pd.isna(anos_listagem) and float(anos_listagem) >= 5:
+        return 1
+    # FALLBACK: Se a CVM não enviou a data, mas a empresa tem +5 anos de balanços no banco
+    elif pd.isna(anos_listagem) and anos_hist_banco >= 5:
+        return 1
+    return 0
 
 # ==========================================================
 # 5. CALCULAR SCORE
@@ -292,7 +304,7 @@ for _, row in df.iterrows():
         dividendos = round(dividendos * (25 / 20), 2)
         valuation = round(valuation * (13 / 10), 2)
     
-    b_listagem = bonus_listagem(row.get("anos_listagem"))
+    b_listagem = bonus_listagem(row.get("anos_listagem"), row.get("anos_hist_banco"))
     
     # TOTAL
     score_cs = rentabilidade + crescimento + seguranca + dividendos + valuation + bonus_roe + b_listagem
