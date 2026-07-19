@@ -1,5 +1,5 @@
 """
-ETL - Métricas Setoriais Históricas
+ETL - Métricas Setoriais Históricas (Full Load)
 Calcula as medianas dos indicadores por setor e por data de balanço para o CS Score 2.0.
 """
 
@@ -9,27 +9,7 @@ import numpy as np
 from etl.database.supabase_client import supabase
 
 # ==========================================================
-# 1. BUSCAR A DATA DO ÚLTIMO CÁLCULO
-# ==========================================================
-print("Buscando data do último cálculo de indicadores...")
-resp_data = (
-    supabase.table("indicadores")
-    .select("data_calculo")
-    .order("data_calculo", desc=True)
-    .limit(1)
-    .execute()
-    .data
-)
-
-if not resp_data:
-    print("❌ Nenhum indicador encontrado. Rode o cálculo de indicadores primeiro.")
-    exit()
-
-data_calculo = resp_data[0]["data_calculo"]
-print(f"Calculando medianas históricas para a data de cálculo: {data_calculo}")
-
-# ==========================================================
-# 2. BUSCAR EMPRESAS (Paginado)
+# 1. BUSCAR EMPRESAS (Paginado)
 # ==========================================================
 print("Carregando empresas...")
 empresas_data = []
@@ -50,16 +30,15 @@ while True:
 empresas_df = pd.DataFrame(empresas_data)
 
 # ==========================================================
-# 3. BUSCAR INDICADORES (Paginado e Filtrado pela Data de Cálculo)
+# 2. BUSCAR TODOS OS INDICADORES HISTÓRICOS (Paginado)
 # ==========================================================
-print("Carregando indicadores...")
+print("Carregando todos os indicadores históricos...")
 indicadores_data = []
 offset = 0
 while True:
     chunk = (
         supabase.table("indicadores")
         .select("ticker, data_balanco, p_l, p_vp, ev_ebit, roe, roic, dy_atual, div_liq_ebitda")
-        .eq("data_calculo", data_calculo)  # FILTRO: Só os registros calculados agora
         .range(offset, offset + 999)
         .execute()
         .data
@@ -72,17 +51,17 @@ while True:
 indicadores_df = pd.DataFrame(indicadores_data)
 
 # ==========================================================
-# 4. MERGE E LIMPEZA
+# 3. MERGE E LIMPEZA
 # ==========================================================
 df = empresas_df.merge(indicadores_df, on="ticker", how="inner")
-print(f"{len(df)} registros de indicadores históricos encontrados.")
+print(f"{len(df)} registros históricos encontrados para processar.")
 
 colunas = ["p_l", "p_vp", "ev_ebit", "roe", "roic", "dy_atual", "div_liq_ebitda"]
 for coluna in colunas:
     df[coluna] = pd.to_numeric(df[coluna], errors="coerce")
 
 # ==========================================================
-# 5. CÁLCULO DAS MEDIANAS HISTÓRICAS (Por Setor e Data Balanço)
+# 4. CÁLCULO DAS MEDIANAS HISTÓRICAS (Por Setor e Data Balanço)
 # ==========================================================
 def mediana_positiva(serie):
     serie = serie.dropna()
@@ -121,12 +100,11 @@ metricas_df = pd.DataFrame(resultado)
 metricas_df = metricas_df.replace({np.nan: None})
 
 # ==========================================================
-# 6. UPSERT NO SUPABASE
+# 5. SALVAR NO SUPABASE (Upsert)
 # ==========================================================
 if not metricas_df.empty:
     print(f"Atualizando metricas_score para {len(metricas_df)} setores/datas...")
     
-    # Upsert em lotes para evitar payload muito grande
     lote = 500
     for i in range(0, len(metricas_df), lote):
         chunk_df = metricas_df.iloc[i:i + lote]
