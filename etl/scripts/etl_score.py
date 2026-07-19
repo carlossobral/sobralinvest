@@ -4,7 +4,8 @@ ETL - Score CS 2.0
 Calcula o Score CS para todas as empresas.
 
 Fluxo:
-indicadores + empresas + metricas_score + dividendos = score_cs
+indicadores + empresas + metricas_score + dividendos = score
+Regra: Se setor < 3 empresas, usa mediana do mercado geral.
 """
 
 import pandas as pd
@@ -12,11 +13,7 @@ from datetime import datetime
 from etl.database.supabase_client import supabase
 
 # ==========================================================
-# 1. IMPORTS
-# ==========================================================
-
-# ==========================================================
-# 2. BUSCAR DATA_CÁLCULO
+# 1. BUSCAR DATA_CÁLCULO E CARREGAR DADOS
 # ==========================================================
 print("Buscando data do último cálculo...")
 resp = (
@@ -33,138 +30,67 @@ if not resp.data:
 data_calculo = resp.data[0]["data_calculo"]
 print(f"Data encontrada: {data_calculo}")
 
-# ==========================================================
-# 3. CARREGAR EMPRESAS
-# ==========================================================
 print("Carregando empresas...")
 dados_emp = []
 offset = 0
 while True:
-    chunk = (
-        supabase.table("empresas")
-        .select("ticker, setor, segmento, anos_listagem")
-        .range(offset, offset + 999)
-        .execute()
-        .data
-    )
+    chunk = supabase.table("empresas").select("ticker, setor, segmento, anos_listagem").range(offset, offset + 999).execute().data
     dados_emp.extend(chunk)
-    if len(chunk) < 1000:
-        break
+    if len(chunk) < 1000: break
     offset += 1000
-
 empresas_df = pd.DataFrame(dados_emp)
-print(f"{len(empresas_df)} empresas carregadas.")
 
-# ==========================================================
-# 4. CARREGAR INDICADORES
-# ==========================================================
 print("Carregando indicadores...")
 dados_ind = []
 offset = 0
 while True:
-    chunk = (
-        supabase.table("indicadores")
-        .select("*")
-        .eq("data_calculo", data_calculo)
-        .range(offset, offset + 999)
-        .execute()
-        .data
-    )
+    chunk = supabase.table("indicadores").select("*").eq("data_calculo", data_calculo).range(offset, offset + 999).execute().data
     dados_ind.extend(chunk)
-    if len(chunk) < 1000:
-        break
+    if len(chunk) < 1000: break
     offset += 1000
-
 indicadores_df = pd.DataFrame(dados_ind)
-print(f"{len(indicadores_df)} indicadores carregados.")
 
-# ==========================================================
-# 5. CARREGAR MÉTRICAS_SCORE
-# ==========================================================
 print("Carregando métricas setoriais...")
-metricas_df = pd.DataFrame(
-    supabase.table("metricas_score").select("*").execute().data
-)
-print(f"{len(metricas_df)} setores carregados.")
+metricas_df = pd.DataFrame(supabase.table("metricas_score").select("*").execute().data)
 
-# ==========================================================
-# 6. CARREGAR DIVIDENDOS
-# ==========================================================
 print("Carregando dividendos...")
 dados_div = []
 offset = 0
 while True:
-    chunk = (
-        supabase.table("dividendos")
-        .select("ticker, data_pagamento, valor")
-        .range(offset, offset + 999)
-        .execute()
-        .data
-    )
+    chunk = supabase.table("dividendos").select("ticker, data_pagamento, valor").range(offset, offset + 999).execute().data
     dados_div.extend(chunk)
-    if len(chunk) < 1000:
-        break
+    if len(chunk) < 1000: break
     offset += 1000
-
 dividendos_df = pd.DataFrame(dados_div)
-print(f"{len(dividendos_df)} eventos de dividendos carregados.")
 
 # ==========================================================
-# 7. CALCULAR HISTÓRICO ROE (VETORIZADO)
+# 2. HISTÓRICOS (ROE E DIVIDENDOS)
 # ==========================================================
 print("Calculando histórico do ROE (5 anos completos)...")
-
 hist_roe_resp = []
 offset = 0
 while True:
-    chunk = (
-        supabase.table("indicadores")
-        .select("ticker, ano, roe")
-        .range(offset, offset + 999)
-        .execute()
-        .data
-    )
+    chunk = supabase.table("indicadores").select("ticker, ano, roe").range(offset, offset + 999).execute().data
     hist_roe_resp.extend(chunk)
-    if len(chunk) < 1000:
-        break
+    if len(chunk) < 1000: break
     offset += 1000
 
 hist_roe_df = pd.DataFrame(hist_roe_resp)
-
-# Regra: Excluir ano parcial (corrente) e pegar 5 anos completos
-# CORREÇÃO: Remover ano parcial (ano corrente) e pegar 5 anos completos
 ano_atual = datetime.now().year
-anos_disponiveis = [
-    a for a in sorted(hist_roe_df["ano"].unique(), reverse=True)
-    if a < ano_atual
-][:5]
-
+anos_disponiveis = [a for a in sorted(hist_roe_df["ano"].unique(), reverse=True) if a < ano_atual][:5]
 hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
 hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 10
 consistencia_roe = hist_roe_df.groupby('ticker')['roe_10'].sum().reset_index()
 consistencia_roe.columns = ['ticker', 'anos_roe_10']
 
-print("Histórico ROE processado.")
-
-# ==========================================================
-# 8. CALCULAR HISTÓRICO DIVIDENDOS (VETORIZADO)
-# ==========================================================
 print("Calculando histórico de dividendos (6 anos completos)...")
-
 if not dividendos_df.empty:
     dividendos_df['data_pagamento'] = pd.to_datetime(dividendos_df['data_pagamento'])
-    dividendos_df['valor'] = pd.to_numeric(dividendos_df['valor'], errors='coerce').fillna(0)
+    dividendos_df['valor'] = pd.to_numeric(dividendos_df['valor'], errors="coerce").fillna(0)
     dividendos_df['ano'] = dividendos_df['data_pagamento'].dt.year
     
-    # Regra: Garantir 6 anos COMPLETOS, excluindo o ano parcial corrente
-    ano_atual = datetime.now().year
     ano_limite = ano_atual - 6
-    
-    div_6a = dividendos_df[
-        (dividendos_df["ano"] >= ano_limite) & 
-        (dividendos_df["ano"] < ano_atual)
-    ]
-    
+    div_6a = dividendos_df[(dividendos_df["ano"] >= ano_limite) & (dividendos_df["ano"] < ano_atual)]
     div_anual = div_6a.groupby(['ticker', 'ano'])['valor'].sum().reset_index()
     div_anual['pagou'] = div_anual['valor'] > 0
     hist_div = div_anual.groupby('ticker')['pagou'].sum().reset_index()
@@ -172,28 +98,33 @@ if not dividendos_df.empty:
 else:
     hist_div = pd.DataFrame(columns=['ticker', 'anos_div_pagos'])
 
-print("Histórico de dividendos processado.")
-
 # ==========================================================
-# 9. MERGE
+# 3. MERGE E MEDIANA DE MERCADO
 # ==========================================================
-print("Unindo bases...")
-
+print("Unindo bases e calculando medianas de mercado...")
 df = indicadores_df.merge(empresas_df, on="ticker", how="left")
-df = df.merge(metricas_df, on="setor", how="left")
+df = df.merge(metricas_df, on=["setor", "data_balanco"], how="left")
 df = df.merge(consistencia_roe, on="ticker", how="left")
 df = df.merge(hist_div, on="ticker", how="left")
 
 df['anos_roe_10'] = df['anos_roe_10'].fillna(0).astype(int)
 df['anos_div_pagos'] = df['anos_div_pagos'].fillna(0).astype(int)
 
-print(f"{len(df)} empresas prontas para cálculo.")
+def med_pos(serie):
+    s = pd.to_numeric(serie, errors='coerce').dropna()
+    s = s[s > 0]
+    return s.median() if not s.empty else None
+
+mkt_medians = df.groupby('data_balanco').agg(
+    pl_mkt=('p_l', med_pos), pvp_mkt=('p_vp', med_pos), ev_ebit_mkt=('ev_ebit', med_pos),
+    roe_mkt=('roe', med_pos), roic_mkt=('roic', med_pos)
+).reset_index()
+
+df = df.merge(mkt_medians, on='data_balanco', how='left')
 
 # ==========================================================
-# 10. FUNÇÕES SCORE
+# 4. FUNÇÕES SCORE E FILTROS
 # ==========================================================
-
-# --- RENTABILIDADE (25) ---
 def score_roe(val):
     if pd.isna(val): return 0
     if val >= 25: return 10
@@ -225,7 +156,6 @@ def score_consistencia_roe(anos):
     if anos == 3: return 1
     return 0
 
-# --- CRESCIMENTO (25) ---
 def score_cagr_receita(val):
     if pd.isna(val): return 0
     if val >= 20: return 12
@@ -244,7 +174,6 @@ def score_cagr_lucro(val):
     if val >= 0: return 2
     return 0
 
-# --- SEGURANÇA (20 - Apenas Normais) ---
 def score_divida(val):
     if pd.isna(val): return 0
     if val <= 0: return 15
@@ -263,7 +192,6 @@ def score_liquidez(val):
     if val >= 0.5: return 1
     return 0
 
-# --- DIVIDENDOS (20) ---
 def score_hist_div(anos):
     if anos >= 6: return 8
     if anos == 5: return 6
@@ -288,7 +216,6 @@ def score_dy_medio(val):
     if val >= 2: return 1
     return 0
 
-# --- VALUATION (10 + Bônus) ---
 def score_pl_rel(val, med):
     if pd.isna(val) or val <= 0 or pd.isna(med) or med <= 0: return 0
     return 3 if val < med else 0
@@ -301,33 +228,21 @@ def score_ev_ebit_rel(val, med):
     if pd.isna(val) or val <= 0 or pd.isna(med) or med <= 0: return 0
     return 2 if val < med else 0
 
-# --- DETECÇÃO BANCOS E SEGURADORAS (REGRA FINAL) ---
 def eh_financeiro(segmento, ticker):
-    if pd.isna(segmento): 
-        return False
-    
+    if pd.isna(segmento): return False
     seg = str(segmento).strip()
     tk = str(ticker).strip().upper()
-    
-    # Regra Banco: É banco, mas não é a Itaúsa (Holdings)
     is_banco = seg == "Bancos" and tk not in ['ITSA3', 'ITSA4']
-    
-    # Regra Seguradora: É seguradora OU está na lista de tickers específicos
     is_seguradora = seg == "Seguradoras" or tk in ['WIZC3', 'CXSE3', 'BBSE3']
-    
     return is_banco or is_seguradora
 
-# --- BÔNUS LISTAGEM ---
 def bonus_listagem(anos):
-    if pd.isna(anos):
-        return 0
-    try:
-        return 1 if float(anos) >= 5 else 0
-    except (ValueError, TypeError):
-        return 0
+    if pd.isna(anos): return 0
+    try: return 1 if float(anos) >= 5 else 0
+    except: return 0
 
 # ==========================================================
-# 11. CALCULAR SCORE
+# 5. CALCULAR SCORE
 # ==========================================================
 print("Calculando Score CS...")
 
@@ -338,39 +253,37 @@ for _, row in df.iterrows():
     
     # 1. RENTABILIDADE (25 base)
     rentabilidade = (
-        score_roe(row["roe"]) +
-        score_roic(row["roic"]) +
-        score_margem(row["margem_liquida"]) +
-        score_consistencia_roe(row["anos_roe_10"])
+        score_roe(row["roe"]) + score_roic(row["roic"]) +
+        score_margem(row["margem_liquida"]) + score_consistencia_roe(row["anos_roe_10"])
     )
     
     # 2. CRESCIMENTO (25 base)
-    crescimento = (
-        score_cagr_receita(row["cagr_receita_5a"]) + 
-        score_cagr_lucro(row["cagr_lucro_5a"])
-    )
+    crescimento = score_cagr_receita(row["cagr_receita_5a"]) + score_cagr_lucro(row["cagr_lucro_5a"])
     
     # 3. SEGURANÇA (20 base / 0 para financeiros)
-    if is_banco:
-        seguranca = 0
-    else:
-        seguranca = score_divida(row["div_liq_ebitda"]) + score_liquidez(row["liquidez_corrente"])
+    seguranca = 0 if is_banco else score_divida(row["div_liq_ebitda"]) + score_liquidez(row["liquidez_corrente"])
         
     # 4. DIVIDENDOS (20 base)
-    dividendos = (
-        score_hist_div(row["anos_div_pagos"]) + 
-        score_dy_atual(row["dy_atual"]) + 
-        score_dy_medio(row["dividendos_6a_media"])
+    dividendos = score_hist_div(row["anos_div_pagos"]) + score_dy_atual(row["dy_atual"]) + score_dy_medio(row["dividendos_6a_media"])
+    
+    # 5. VALUATION (10 base) E BÔNUS ROE/ROIC
+    n_emp_setor = row.get("empresas_setor")
+    if pd.isna(n_emp_setor) or n_emp_setor < 3:
+        pl_med, pvp_med, ev_ebit_med = row.get("pl_mkt"), row.get("pvp_mkt"), row.get("ev_ebit_mkt")
+        roe_med, roic_med = row.get("roe_mkt"), row.get("roic_mkt")
+    else:
+        pl_med, pvp_med, ev_ebit_med = row.get("pl_mediano"), row.get("pvp_mediano"), row.get("ev_ebit_mediano")
+        roe_med, roic_med = row.get("roe_mediano"), row.get("roic_mediano")
+
+    valuation = (
+        score_pl_rel(row["p_l"], pl_med) + score_pvp_rel(row["p_vp"], pvp_med) +
+        score_ev_ebit_rel(row["ev_ebit"], ev_ebit_med)
     )
     
-    # 5. VALUATION (10 base + Bônus ROE/ROIC)
-    valuation = (
-        score_pl_rel(row["p_l"], row.get("pl_mediano")) +
-        score_pvp_rel(row["p_vp"], row.get("pvp_mediano")) +
-        score_ev_ebit_rel(row["ev_ebit"], row.get("ev_ebit_mediano")) +
-        (1 if not pd.isna(row["roe"]) and not pd.isna(row.get("roe_mediano")) and row["roe"] > row.get("roe_mediano") else 0) +
-        (1 if not pd.isna(row["roic"]) and not pd.isna(row.get("roic_mediano")) and row["roic"] > row.get("roic_mediano") else 0)
-    )
+    # Bônus ROE e ROIC (Separado do Pilar Valuation)
+    bonus_roe = 0
+    bonus_roe += (1 if not pd.isna(row["roe"]) and not pd.isna(roe_med) and row["roe"] > roe_med else 0)
+    bonus_roe += (1 if not pd.isna(row["roic"]) and not pd.isna(roic_med) and row["roic"] > roic_med else 0)
     
     # REDISTRIBUIÇÃO DOS PESOS (Apenas Financeiros)
     if is_banco:
@@ -379,51 +292,42 @@ for _, row in df.iterrows():
         dividendos = round(dividendos * (25 / 20), 2)
         valuation = round(valuation * (13 / 10), 2)
     
-    # TOTAL (+ Bônus Listagem)
-    score_cs = (
-        rentabilidade
-        + crescimento
-        + seguranca
-        + dividendos
-        + valuation
-        + bonus_listagem(row.get("anos_listagem"))
-    )
+    b_listagem = bonus_listagem(row.get("anos_listagem"))
     
-    # Limite máximo 103
+    # TOTAL
+    score_cs = rentabilidade + crescimento + seguranca + dividendos + valuation + bonus_roe + b_listagem
     score_cs = min(103, max(0, score_cs))
     
     resultados.append({
         "ticker": row["ticker"],
-        "score_cs": round(score_cs, 2)
+        "data_balanco": row.get("data_balanco"),
+        "score": round(score_cs, 2),
+        "rentabilidade": round(rentabilidade, 2),
+        "crescimento": round(crescimento, 2),
+        "seguranca": round(seguranca, 2),
+        "dividendos": round(dividendos, 2),
+        "valuation": round(valuation, 2),
+        "bonus_roe": bonus_roe,
+        "bonus_listagem": b_listagem
     })
 
 resultado_df = pd.DataFrame(resultados)
 
 # ==========================================================
-# 12. ATUALIZAR SCORE_CS (VERSÃO OTIMIZADA BATCH UPSERT)
+# 6. SALVAR NA TABELA SCORE
 # ==========================================================
-print(f"Atualizando Score CS para {len(resultado_df)} empresas (Batch Upsert)...")
+print(f"Atualizando tabela 'score' para {len(resultado_df)} registros...")
 
-# Prepara o payload com as chaves únicas + o dado a ser atualizado
-batch_payload = []
-for _, row in resultado_df.iterrows():
-    batch_payload.append({
-        "ticker": row["ticker"],
-        "data_calculo": data_calculo, # Necessário para o upsert resolver o conflito
-        "score_cs": row["score_cs"]
-    })
-
-# Upsert em lotes de 100
-lote = 100
+lote = 500
 erros = 0
 salvos = 0
 
-for i in range(0, len(batch_payload), lote):
-    lote_atual = batch_payload[i: i + lote]
+for i in range(0, len(resultado_df), lote):
+    lote_atual = resultado_df.iloc[i: i + lote].to_dict(orient="records")
     try:
-        supabase.table("indicadores").upsert(
+        supabase.table("score").upsert(
             lote_atual,
-            on_conflict="ticker,data_calculo" # Chave que definimos lá no início!
+            on_conflict="ticker,data_balanco"
         ).execute()
         salvos += len(lote_atual)
     except Exception as e:
