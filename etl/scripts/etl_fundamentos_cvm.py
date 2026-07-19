@@ -6,10 +6,10 @@ from zipfile import ZipFile
 from datetime import datetime, UTC
 from etl.database.supabase_client import supabase
 
-ANO_FINAL = datetime.now().year
-ANO_INICIAL = ANO_FINAL - 1
-#ANO_INICIAL = 2015
-#ANO_FINAL = 2026
+#ANO_FINAL = datetime.now().year
+#ANO_INICIAL = ANO_FINAL - 1
+ANO_INICIAL = 2015
+ANO_FINAL = 2026
 
 # Contas validadas
 MAPEAMENTO_DRE = {
