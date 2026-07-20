@@ -35,7 +35,7 @@ def init_supabase():
 supabase = init_supabase()
 
 # ==========================================================
-# 2. CSS GLOBAL (Recriado do seu layout antigo)
+# 2. CSS GLOBAL (TEMA ESCURO, CARDS E TOOLTIPS CORRIGIDOS)
 # ==========================================================
 st.markdown("""
 <style>
@@ -51,7 +51,7 @@ st.markdown("""
 .st { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; text-transform: uppercase; letter-spacing: 0.1em; margin: 40px 0 22px 0; padding-bottom: 10px; border-bottom: 2px solid #334155; display: flex; align-items: center; gap: 10px; }
 .mc { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 18px 16px; transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 100%; display: flex; flex-direction: column; justify-content: space-between; min-height: 95px; }
 .mc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.25); border-color: #3b82f6; }
-.ml { font-size: 0.72rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; line-height: 1.3; }
+.ml { position: relative; font-size: 0.72rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; line-height: 1.3; }
 .mv { font-size: 1.45rem; font-weight: 700; color: #f1f5f9; line-height: 1.1; letter-spacing: -0.02em; }
 .sc { border-radius: 16px; padding: 24px; text-align: center; box-shadow: 0 10px 15px rgba(0,0,0,0.2); }
 .sn { font-size: 3.5rem; font-weight: 800; line-height: 1; margin-bottom: 8px; }
@@ -66,11 +66,17 @@ div[data-testid="stSidebar"] div.stButton > button { background: linear-gradient
 div[data-testid="stSidebar"] div.stButton > button:hover { border-color: #60a5fa !important; transform: translateX(4px) !important; }
 div[data-testid="stSidebar"] div.stButton > button[kind="primary"] { background: linear-gradient(145deg, #1e3a8a 0%, #1e40af 100%) !important; border-color: #3b82f6 !important; color: #ffffff !important; }
 div[data-testid="stButton"] > button[kind="secondary"] { background: transparent !important; border: none !important; padding: 0 !important; color: #38bdf8 !important; text-decoration: underline !important; font-size: 1.1rem !important; font-weight: 800 !important; cursor: pointer !important; width: auto !important; min-width: 0 !important; box-shadow: none !important; margin: 0 auto 4px auto !important; display: block !important; }
+
+/* CSS DO TOOLTIP CORRIGIDO */
+.tt { position: relative; display: inline-block; cursor: help; vertical-align: middle; }
+.tt-i { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: #475569; color: #f1f5f9; font-size: 10px; font-weight: 700; margin-left: 4px; }
+.tt-t { visibility: hidden; opacity: 0; width: 250px; background-color: #1e293b; border: 1px solid #475569; color: #e2e8f0; text-align: left; border-radius: 6px; padding: 10px; position: absolute; z-index: 9999; top: 20px; left: 50%; transform: translateX(-50%); transition: opacity 0.3s ease; font-size: 0.8rem; line-height: 1.4; box-shadow: 0 4px 6px rgba(0,0,0,0.3); pointer-events: none; }
+.tt:hover .tt-t { visibility: visible; opacity: 1; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 3. TOOLTIPS E FUNÇÕES AUXILIARES (Do seu código original)
+# 3. TOOLTIPS E FUNÇÕES AUXILIARES
 # ==========================================================
 TOOLTIPS = {
     "P/L": "Preço sobre o Lucro. Demonstra quanto o mercado está disposto a pagar pelos lucros da empresa.",
@@ -123,7 +129,7 @@ def tooltip(t):
     return f'<span class="tt"><span class="tt-i">?</span><span class="tt-t">{d}</span></span>' if d else ""
 
 # ==========================================================
-# 4. FUNÇÕES DE DADOS (ADAPTADAS PARA SUPABASE)
+# 4. FUNÇÕES DE DADOS
 # ==========================================================
 @st.cache_data(ttl=3600)
 def load_data():
@@ -143,7 +149,7 @@ def load_data():
     df = df_score.merge(df_emp, on="ticker", how="left")
     df = df.merge(df_ind, on="ticker", how="left")
     
-    # Buscar cotação mais recente para todas as empresas
+    # Buscar cotação mais recente
     resp_cot_date = supabase.table("cotacoes").select("data").order("data", desc=True).limit(1).execute()
     if resp_cot_date.data:
         latest_date = resp_cot_date.data[0]['data']
@@ -153,7 +159,6 @@ def load_data():
     else:
         df['preco_atual'] = 0
 
-    # Calcular Valor de Mercado se não existir
     if 'preco_atual' in df.columns and 'qtd_acoes_totais' in df.columns:
         df['valor_mercado'] = df['preco_atual'] * df['qtd_acoes_totais']
         
@@ -241,11 +246,9 @@ def render_header(pagina, ticker_sel=None):
 def pagina_home():
     render_header("home")
     
-    # 1. Widget do Ibovespa Primeiro
     st.markdown("### 📈 Ibovespa")
     components.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""", height=420)
     
-    # 2. Altas e Baixas
     altas, baixas = get_altas_baixas()
     col_alt, col_baix = st.columns(2)
     
@@ -286,12 +289,11 @@ def pagina_analise():
     sel = st.selectbox("Selecione o ativo", options=opts)
     ticker = sel.split(' - ')[0]
     
-    render_header("analise", ticker) # Atualiza header com o ticker
+    render_header("analise", ticker)
     
     ativo = get_ativo_detalhado(ticker)
     if not ativo: return
 
-    # Cabeçalho Setor
     st.markdown(f"""
     <div style="display: flex; gap: 24px; margin: 8px 0 16px 0;">
         <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8;">Setor</span><span style="font-size: 0.85rem; color: #f1f5f9; margin-left: 8px;">{ativo.get('setor', 'N/A')}</span></div>
@@ -299,7 +301,6 @@ def pagina_analise():
     </div>
     """, unsafe_allow_html=True)
 
-    # Gráfico TradingView
     components.html(f"""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{{"symbols": [["BMFBOVESPA:{ticker}|1D"]], "chartOnly": false, "width": "100%", "height": "350", "locale": "br", "colorTheme": "dark"}}</script></div>""", height=360)
 
     def sec(title, data, cols):
@@ -312,7 +313,6 @@ def pagina_analise():
                     lbl, val = data[i]
                     cs[c].markdown(f"""<div class="mc"><div class="ml">{lbl} {tooltip(lbl)}</div><div class="mv">{val}</div></div>""", unsafe_allow_html=True)
 
-    # Convertendo decimais do banco para exibição em %
     sec("Valuation", [
         ("P/L", f"{safe(ativo.get('p_l')):.2f}x"), 
         ("P/VP", f"{safe(ativo.get('p_vp')):.2f}x"), 
@@ -364,7 +364,6 @@ def pagina_analise():
         ("CAGR Lucros 5a", f"{safe(ativo.get('cagr_lucro_5a'))*100:.2f}%")
     ], 2)
 
-    # Preço Teto / Justo
     st.markdown('<div class="st">Preco Teto | Preco Justo</div>', unsafe_allow_html=True)
     pr = safe(ativo.get("preco_atual"))
     pj = [
@@ -380,7 +379,6 @@ def pagina_analise():
         price_str = f"R$ {p:.2f}" if p > 0 else "N/A"
         cps[i].markdown(f"""<div class="mc" style="text-align: center;"><div class="ml">{t} {tooltip(t)}</div><div class="mv">{price_str}</div><div style="color:{c}; font-weight:700;">{ups:+.1f}%</div></div>""", unsafe_allow_html=True)
 
-    # Score 3.0
     st.markdown('<div class="st">SCORE CS 3.0</div>', unsafe_allow_html=True)
     score = safe(ativo.get('score'))
     col, bg, lbl = ("#10b981", "#065f46", "Excelente") if score >= 80 else (("#84cc16", "#3f6212", "Bom") if score >= 60 else (("#f59e0b", "#92400e", "Regular") if score >= 40 else (("#f97316", "#7c2d12", "Fraco") if score >= 20 else ("#dc2626", "#7f1d1d", "Péssimo"))))
@@ -405,7 +403,6 @@ def pagina_rankings():
     df = load_data()
     if df.empty: return
 
-    # Filtros
     setores = ["Todos"] + sorted([str(x) for x in df['setor'].dropna().unique().tolist() if str(x) not in ['nan', 'N/A', '#N/A', '']])
     subsetores = ["Todos"] + sorted([str(x) for x in df['subsetor'].dropna().unique().tolist() if str(x) not in ['nan', 'N/A', '#N/A', '']])
 
@@ -473,7 +470,6 @@ def pagina_rankings():
                         </div>
                         """, unsafe_allow_html=True)
 
-    # Mapeamento dos rankings
     if ranking_sel == "Maior Valor de Mercado":
         render_ranking(df_filt, 'valor_mercado', 'Maior Valor de Mercado', lambda x: f"R$ {x/1e9:.2f}B" if x >= 1e9 else f"R$ {x/1e6:.2f}M", cor_valor="#fbbf24")
     elif ranking_sel == "Maiores Lucros":
@@ -487,7 +483,6 @@ def pagina_rankings():
     elif ranking_sel == "Maiores ROE":
         render_ranking(df_filt, 'roe', 'Maiores ROE', lambda x: f"{x*100:.2f}%", cor_valor="#10b981")
     elif ranking_sel == "Maior Upside AGF":
-        # Calcula upside dinamicamente
         df_filt['upside_agf'] = ((df_filt['agf'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
         render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bfa")
     elif ranking_sel == "Mais Baratas - Graham":
