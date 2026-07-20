@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from supabase import create_client
 from dotenv import load_dotenv
 from pathlib import Path
@@ -63,7 +62,6 @@ st.markdown("""
 # ==========================================================
 @st.cache_data(ttl=3600)
 def load_data():
-    # Busca Score
     resp_score = supabase.table("score").select("ticker, score, rentabilidade, crescimento, seguranca, dividendos, valuation, data_balanco").order("data_balanco", desc=True).limit(1000).execute()
     df_score = pd.DataFrame(resp_score.data)
     if df_score.empty: return pd.DataFrame()
@@ -71,11 +69,9 @@ def load_data():
     data_max = df_score['data_balanco'].max()
     df_score = df_score[df_score['data_balanco'] == data_max]
     
-    # Busca Indicadores
     resp_ind = supabase.table("indicadores").select("*").eq("data_balanco", data_max).execute()
     df_ind = pd.DataFrame(resp_ind.data)
     
-    # Busca Empresas
     resp_emp = supabase.table("empresas").select("ticker, nome, setor, subsetor, segmento").execute()
     df_emp = pd.DataFrame(resp_emp.data)
     
@@ -83,21 +79,44 @@ def load_data():
     df = df.merge(df_ind, on="ticker", how="left")
     return df
 
+@st.cache_data(ttl=3600)
+def get_altas_baixas():
+    resp = supabase.table("cotacoes").select("ticker, data, fechamento").order("data", desc=True).limit(1000).execute()
+    df = pd.DataFrame(resp.data)
+    if df.empty: return pd.DataFrame(), pd.DataFrame()
+    
+    df['fechamento'] = pd.to_numeric(df['fechamento'], errors='coerce')
+    df['data'] = pd.to_datetime(df['data'])
+    df = df.dropna(subset=['data'])
+    
+    datas = sorted(df['data'].unique(), reverse=True)
+    if len(datas) < 2: return pd.DataFrame(), pd.DataFrame()
+    
+    data_recente = datas[0]
+    data_anterior = datas[1]
+    
+    df_recente = df[df['data'] == data_recente][['ticker', 'fechamento']].rename(columns={'fechamento': 'close_hoje'})
+    df_anterior = df[df['data'] == data_anterior][['ticker', 'fechamento']].rename(columns={'fechamento': 'close_ontem'})
+    
+    df_merge = df_recente.merge(df_anterior, on='ticker', how='inner')
+    df_merge['variacao'] = ((df_merge['close_hoje'] - df_merge['close_ontem']) / df_merge['close_ontem']) * 100
+    
+    altas = df_merge.nlargest(5, 'variacao')
+    baixas = df_merge.nsmallest(5, 'variacao')
+    
+    return altas, baixas
+
 def get_ativo_detalhado(ticker):
-    # Busca dados da empresa
     emp = supabase.table("empresas").select("*").eq("ticker", ticker).execute().data
     if not emp: return None
     emp = emp[0]
     
-    # Busca último score
     sc = supabase.table("score").select("*").eq("ticker", ticker).order("data_balanco", desc=True).limit(1).execute().data
     if sc: emp.update(sc[0])
         
-    # Busca último indicador
     ind = supabase.table("indicadores").select("*").eq("ticker", ticker).order("data_balanco", desc=True).limit(1).execute().data
     if ind: emp.update(ind[0])
         
-    # Busca última cotação
     cot = supabase.table("cotacoes").select("fechamento, data").eq("ticker", ticker).order("data", desc=True).limit(1).execute().data
     if cot:
         emp["preco_atual"] = cot[0]["fechamento"]
@@ -112,11 +131,34 @@ def get_ativo_detalhado(ticker):
 # ==========================================================
 def pagina_home():
     st.markdown('<h1 style="color:#f1f5f9;">🏠 Dashboard & Mercado</h1>', unsafe_allow_html=True)
-    st.markdown("Bem-vindo ao Sobral Invest 3.0. Use o menu lateral para navegar.")
     
-    # Widget TradingView Ibovespa
+    altas, baixas = get_altas_baixas()
+    
+    col_alt, col_baix = st.columns(2)
+    with col_alt:
+        st.markdown('<div class="st">🚀 Maiores Altas (Hoje)</div>', unsafe_allow_html=True)
+        for _, row in altas.iterrows():
+            st.markdown(f"""
+            <div class="mc" style="border-left: 4px solid #10b981; margin-bottom: 10px;">
+                <div class="ml">{row['ticker']}</div>
+                <div class="mv" style="color:#10b981;">+{row['variacao']:.2f}%</div>
+                <div style="font-size:0.8rem; color:#94a3b8;">R$ {row['close_hoje']:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+    with col_baix:
+        st.markdown('<div class="st">🩸 Maiores Baixas (Hoje)</div>', unsafe_allow_html=True)
+        for _, row in baixas.iterrows():
+            st.markdown(f"""
+            <div class="mc" style="border-left: 4px solid #ef4444; margin-bottom: 10px;">
+                <div class="ml">{row['ticker']}</div>
+                <div class="mv" style="color:#ef4444;">{row['variacao']:.2f}%</div>
+                <div style="font-size:0.8rem; color:#94a3b8;">R$ {row['close_hoje']:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
     st.markdown("### 📈 Ibovespa")
-    components.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""", height=420)
+    st.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""")
 
 def pagina_analise():
     st.markdown('<h1 style="color:#f1f5f9;">🔍 Análise Fundamentalista</h1>', unsafe_allow_html=True)
@@ -144,7 +186,7 @@ def pagina_analise():
     """, unsafe_allow_html=True)
 
     # Gráfico TradingView
-    components.html(f"""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{{"symbols": [["BMFBOVESPA:{ticker}|1D"]], "chartOnly": false, "width": "100%", "height": "350", "locale": "br", "colorTheme": "dark"}}</script></div>""", height=360)
+    st.html(f"""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{{"symbols": [["BMFBOVESPA:{ticker}|1D"]], "chartOnly": false, "width": "100%", "height": "350", "locale": "br", "colorTheme": "dark"}}</script></div>""")
 
     def safe(v, d=0.0):
         try: return float(v) if v is not None else d
