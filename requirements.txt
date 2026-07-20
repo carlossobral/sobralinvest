@@ -5,3 +5,4 @@ httpx
 openpyxl
 python-dotenv
 pydantic-settings
+plotly
