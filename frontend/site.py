@@ -275,11 +275,9 @@ def pagina_home():
             """, unsafe_allow_html=True)
 
 def pagina_analise():
-    render_header("analise")
-    st.markdown('<div class="c">', unsafe_allow_html=True)
-    
     df = load_data()
     if df.empty:
+        render_header("analise")
         st.warning("Dados não disponíveis.")
         return
         
@@ -289,11 +287,15 @@ def pagina_analise():
     sel = st.selectbox("Selecione o ativo", options=opts)
     ticker = sel.split(' - ')[0]
     
+    # Renderiza o header apenas UMA VEZ, já com o ticker selecionado
     render_header("analise", ticker)
+    
+    st.markdown('<div class="c">', unsafe_allow_html=True)
     
     ativo = get_ativo_detalhado(ticker)
     if not ativo: return
 
+    # Cabeçalho Setor
     st.markdown(f"""
     <div style="display: flex; gap: 24px; margin: 8px 0 16px 0;">
         <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8;">Setor</span><span style="font-size: 0.85rem; color: #f1f5f9; margin-left: 8px;">{ativo.get('setor', 'N/A')}</span></div>
