@@ -83,7 +83,7 @@ def load_data():
     df = df.merge(df_ind, on="ticker", how="left")
     return df
 
-def get_ativo detalhado(ticker):
+def get_ativo_detalhado(ticker):
     # Busca dados da empresa
     emp = supabase.table("empresas").select("*").eq("ticker", ticker).execute().data
     if not emp: return None
