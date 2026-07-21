@@ -29,8 +29,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          #echo "Iniciando ETL Empresas..."
-          #python -m etl.scripts.etl_empresas
+         # echo "Iniciando ETL Empresas..."
+         # python -m etl.scripts.etl_empresas
           
           echo "Iniciando ETL Cotações..."
           python -m etl.scripts.etl_cotacoes
