@@ -3,7 +3,7 @@ name: ETL Diário Sobral Invest
 on:
   schedule:
     # Roda todos os dias às 23:00 UTC (20:00 no horário de Brasília)
-    - cron: '0 23 * * *'
+    - cron: '20 20 * * *'
   workflow_dispatch: # Permite rodar manualmente pelo site do GitHub
 
 jobs:
