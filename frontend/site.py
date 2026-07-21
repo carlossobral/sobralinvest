@@ -128,6 +128,26 @@ def tooltip(t):
     d = TOOLTIPS.get(t, "")
     return f'<span class="tt"><span class="tt-i">?</span><span class="tt-t">{d}</span></span>' if d else ""
 
+def sem_color(label, val_str):
+    """Retorna a cor com base na lógica matemática do indicador."""
+    try:
+        # Limpa a string para extrair o número
+        val = float(str(val_str).replace('R$','').replace('x','').replace('%','').replace('+','').replace(',','').strip())
+    except:
+        return "#94a3b8" # Cinza se não conseguir converter
+    
+    l = label.lower()
+    
+    # Indicadores onde MENOR é melhor (Valuation e Endividamento)
+    if any(k in l for k in ["p/l", "p/vp", "ev/ebit", "ev/ebitda", "dív. líq", "passivo/ativos", "p/receita", "p/ativo", "p/cap", "p/ebit", "p/ativo circ"]):
+        return "#10b981" if val < 10 else ("#f59e0b" if val < 20 else "#ef4444")
+        
+    # Indicadores onde MAIOR é melhor (Rentabilidade, Crescimento, Liquidez)
+    if any(k in l for k in ["roe", "roic", "roa", "margem", "dy", "cagr", "giro", "patrimonio/ativos", "liq. corrente", "cobertura"]):
+        return "#10b981" if val > 15 else ("#f59e0b" if val > 5 else "#ef4444")
+        
+    return "#38bdf8" # Azul padrão para LPA, VPA, etc (não há regra de bom/ruim direta)
+
 # ==========================================================
 # 4. FUNÇÕES DE DADOS
 # ==========================================================
@@ -287,7 +307,6 @@ def pagina_analise():
     sel = st.selectbox("Selecione o ativo", options=opts)
     ticker = sel.split(' - ')[0]
     
-    # Renderiza o header apenas UMA VEZ, já com o ticker selecionado
     render_header("analise", ticker)
     
     st.markdown('<div class="c">', unsafe_allow_html=True)
@@ -295,11 +314,14 @@ def pagina_analise():
     ativo = get_ativo_detalhado(ticker)
     if not ativo: return
 
-    # Cabeçalho Setor
+    # Cabeçalho Setor > SubSetor > Segmento
     st.markdown(f"""
-    <div style="display: flex; gap: 24px; margin: 8px 0 16px 0;">
-        <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8;">Setor</span><span style="font-size: 0.85rem; color: #f1f5f9; margin-left: 8px;">{ativo.get('setor', 'N/A')}</span></div>
-        <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8;">Segmento</span><span style="font-size: 0.85rem; color: #f1f5f9; margin-left: 8px;">{ativo.get('segmento', 'N/A')}</span></div>
+    <div style="display: flex; gap: 20px; margin: 8px 0 16px 0; align-items: center; flex-wrap: wrap;">
+        <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase;">Setor</span><span style="font-size: 0.85rem; font-weight: 500; color: #f1f5f9; margin-left: 8px;">{ativo.get('setor', 'N/A')}</span></div>
+        <div style="color: #475569;">&rsaquo;</div>
+        <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase;">SubSetor</span><span style="font-size: 0.85rem; font-weight: 500; color: #f1f5f9; margin-left: 8px;">{ativo.get('subsetor', 'N/A')}</span></div>
+        <div style="color: #475569;">&rsaquo;</div>
+        <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase;">Segmento</span><span style="font-size: 0.85rem; font-weight: 500; color: #f1f5f9; margin-left: 8px;">{ativo.get('segmento', 'N/A')}</span></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -313,7 +335,8 @@ def pagina_analise():
                 i = r * cols + c
                 if i < len(data):
                     lbl, val = data[i]
-                    cs[c].markdown(f"""<div class="mc"><div class="ml">{lbl} {tooltip(lbl)}</div><div class="mv">{val}</div></div>""", unsafe_allow_html=True)
+                    cl = sem_color(lbl, val) # Aplica a cor dinâmica
+                    cs[c].markdown(f"""<div class="mc" style="border-left: 4px solid {cl};"><div class="ml">{lbl} {tooltip(lbl)}</div><div class="mv" style="color: {cl};">{val}</div></div>""", unsafe_allow_html=True)
 
     sec("Valuation", [
         ("P/L", f"{safe(ativo.get('p_l')):.2f}x"), 
@@ -486,7 +509,7 @@ def pagina_rankings():
         render_ranking(df_filt, 'roe', 'Maiores ROE', lambda x: f"{x*100:.2f}%", cor_valor="#10b981")
     elif ranking_sel == "Maior Upside AGF":
         df_filt['upside_agf'] = ((df_filt['agf'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
-        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bfa")
+        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bva")
     elif ranking_sel == "Mais Baratas - Graham":
         df_filt['upside_graham'] = ((df_filt['graham'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
         render_ranking(df_filt, 'upside_graham', 'Mais Baratas - Graham', lambda x: f"{x:+.1f}%", cor_valor="#34d399")
@@ -554,6 +577,12 @@ def main():
                 st.rerun()
 
     pagina = st.session_state["pagina_atual"]
+    
+    # Se veio de um clique no ranking, força ir para análise
+    if st.session_state.get("ticker_destino"):
+        pagina = "analise"
+        st.session_state["ticker_destino"] = None # Limpa para não travar nela
+
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
     elif pagina == "rankings": pagina_rankings()
