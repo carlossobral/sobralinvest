@@ -45,30 +45,13 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-/* --- ESTADO NORMAL DO HEADER --- */
+/* Estilo base do header (o JS aplica o fundo e blur no wrapper pai) */
 .header-container {
-    position: relative !important;
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
     padding: 1rem 0 !important;
     margin: 0 !important;
-    background-color: var(--background-color, #0e1117) !important;
-    z-index: 9998;
+    background-color: transparent !important;
     width: 100%;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* --- ESTADO FIXO (ATIVADO PELO JS APÓS ROLAR) --- */
-.header-container.is-sticky {
-    position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 100% !important;
-    z-index: 9999 !important;
-    background-color: rgba(14, 17, 23, 0.95) !important;
-    backdrop-filter: blur(12px) !important;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
-    padding: 0.8rem 0 !important;
-    border-bottom: 1px solid #334155 !important;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -99,91 +82,75 @@ st.markdown("""
 .tt-t { visibility: hidden; opacity: 0; width: 250px; background-color: #1e293b; border: 1px solid #475569; color: #e2e8f0; text-align: left; border-radius: 6px; padding: 10px; position: absolute; z-index: 9999; top: 20px; left: 50%; transform: translateX(-50%); transition: opacity 0.3s ease; font-size: 0.8rem; line-height: 1.4; box-shadow: 0 4px 6px rgba(0,0,0,0.3); pointer-events: none; }
 .tt:hover .tt-t { visibility: visible; opacity: 1; }
 
-/* CSS DO MENU DE NAVEGAÇÃO HORIZONTAL */
-.nav-menu {
-    display: flex;
-    justify-content: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
-}
-.nav-btn {
-    background: transparent;
-    border: 1px solid #334155;
-    color: #94a3b8;
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.2s;
-}
-.nav-btn:hover {
-    border-color: #3b82f6;
-    color: #f1f5f9;
-}
-.nav-btn.active {
-    background: #1e3a8a;
-    border-color: #3b82f6;
-    color: #ffffff;
+/* Ajuste fino para os botões do menu horizontal dentro do wrapper fixo */
+div[data-testid="stHorizontalBlock"] button[kind="primary"], 
+div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+    margin-top: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 3. SCRIPT JAVASCRIPT DEFINITIVO (STICKY HEADER INTELIGENTE)
+# 3. SCRIPT JAVASCRIPT DEFINITIVO (Agrupa Menu + Header no Contêiner Pai)
 # ==========================================================
 components.html("""
 <script>
 (function() {
-    if (window.parent.headerStickyInitialized) return;
-    window.parent.headerStickyInitialized = true;
+    const parentWindow = window.parent;
+    if (parentWindow.headerFixedInitialized) return;
+    parentWindow.headerFixedInitialized = true;
 
-    const doc = window.parent.document;
+    const parentDoc = parentWindow.document;
 
-    function setupStickyHeader() {
-        const header = doc.querySelector('.header-container');
-        if (!header || header.dataset.stickySetup === "true") return;
+    function fixAppHeader() {
+        const header = parentDoc.querySelector('.header-container');
+        if (!header) return;
 
-        const placeholder = doc.createElement('div');
-        placeholder.id = 'header-sticky-placeholder';
-        placeholder.style.display = 'none';
+        // Encontra o contêiner st.container() que engloba tanto o Menu quanto o Header
+        const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+        if (!wrapper || wrapper.dataset.fixed === "true") return;
+
+        // 1. Cria o placeholder para evitar que o conteúdo "pule" (Layout Shift)
+        const placeholder = parentDoc.createElement('div');
+        placeholder.id = 'app-placeholder';
+        placeholder.style.height = wrapper.offsetHeight + 'px';
         placeholder.style.width = '100%';
+        placeholder.style.flexShrink = '0';
         
-        header.parentNode.insertBefore(placeholder, header);
+        // 2. Insere o placeholder ANTES do wrapper
+        wrapper.parentNode.insertBefore(placeholder, wrapper);
 
-        function onScroll() {
-            const rect = header.getBoundingClientRect();
-            if (rect.top <= 0) {
-                if (!header.classList.contains('is-sticky')) {
-                    placeholder.style.height = header.offsetHeight + 'px';
-                    placeholder.style.display = 'block';
-                    header.classList.add('is-sticky');
-                }
-            } else {
-                if (header.classList.contains('is-sticky')) {
-                    placeholder.style.display = 'none';
-                    header.classList.remove('is-sticky');
-                }
-            }
-        }
-
-        doc.addEventListener('scroll', onScroll, { passive: true });
-        onScroll();
-        header.dataset.stickySetup = "true";
+        // 3. Aplica o estilo fixed diretamente no elemento pai (Wrapper)
+        wrapper.style.position = 'fixed';
+        wrapper.style.top = '0';
+        wrapper.style.left = '0';
+        wrapper.style.width = '100%';
+        wrapper.style.zIndex = '9999';
+        wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
+        wrapper.style.backdropFilter = 'blur(12px)';
+        wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
+        wrapper.style.paddingTop = '1rem';
+        wrapper.style.paddingBottom = '1rem';
+        wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+        
+        wrapper.dataset.fixed = "true";
     }
 
-    setTimeout(setupStickyHeader, 300);
-
-    const observer = new window.parent.MutationObserver(() => {
-        const header = doc.querySelector('.header-container');
-        if (header && header.dataset.stickySetup !== "true") {
-            const oldPlaceholder = doc.getElementById('header-sticky-placeholder');
-            if (oldPlaceholder) oldPlaceholder.remove();
-            header.dataset.stickySetup = "false";
-            setupStickyHeader();
+    // Executa após o DOM inicial carregar
+    setTimeout(fixAppHeader, 150);
+    
+    // Re-executa caso o Streamlit re-renderize a página (ex: troca de aba)
+    const observer = new parentWindow.MutationObserver(() => {
+        const header = parentDoc.querySelector('.header-container');
+        if (header) {
+            const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+            if (wrapper && wrapper.dataset.fixed !== "true") {
+                fixAppHeader();
+            }
         }
     });
     
-    observer.observe(doc.body, { childList: true, subtree: true });
+    observer.observe(parentDoc.body, { childList: true, subtree: true });
 })();
 </script>
 """, height=0, width=0)
@@ -314,63 +281,42 @@ def get_ativo_detalhado(ticker):
     return emp
 
 # ==========================================================
-# 6. HEADER UNIFICADO COM MENU INCLUSO
+# 6. HEADER UNIFICADO
 # ==========================================================
-def render_header_and_menu(pagina_atual, ticker_sel=None):
+def render_header(pagina, ticker_sel=None):
     titulo_pagina = ""
     subtitulo = ""
     
-    if pagina_atual == "home":
+    if pagina == "home":
         titulo_pagina = "🏠 Home"
         subtitulo = "Dashboard & Mercado"
-    elif pagina_atual == "analise":
+    elif pagina == "analise":
         titulo_pagina = "🔍 Análise"
         subtitulo = f"Ativo: {ticker_sel}" if ticker_sel else "Selecione um ativo"
-    elif pagina_atual == "rankings":
+    elif pagina == "rankings":
         titulo_pagina = "🏆 Rankings"
         subtitulo = "Top 50 Ativos & Valuation"
-    elif pagina_atual == "comparativo":
+    elif pagina == "comparativo":
         titulo_pagina = "📊 Comparativo"
         subtitulo = "Análise Relativa"
 
-    # HTML do Menu de Navegação
-    menu_html = '<div class="nav-menu">'
-    pages = [("home", "🏠 Home"), ("analise", "🔍 Análise"), ("rankings", "🏆 Rankings"), ("comparativo", "📊 Comparativo")]
-    for key, label in pages:
-        active_class = "active" if pagina_atual == key else ""
-        menu_html += f'<button class="nav-btn {active_class}" onclick="document.getElementById(\'nav_{key}\').click()">{label}</button>'
-    menu_html += '</div>'
-    
-    # HTML do Header
-    header_html = f"""
+    st.markdown(f"""
     <div class="header-container">
-        {menu_html}
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div class="header-brand">
-                <div>
-                    <div class="header-brand-name">SOBRAL Invest</div>
-                    <div class="header-brand-tag">Análise Fundamentalista & Valuation</div>
-                </div>
-            </div>
-            <div class="header-context">
-                <div class="header-page-title">{titulo_pagina}</div>
-                <div class="header-subtitle">{subtitulo}</div>
+        <div class="header-brand">
+            <div>
+                <div class="header-brand-name">SOBRAL Invest</div>
+                <div class="header-brand-tag">Análise Fundamentalista & Valuation</div>
             </div>
         </div>
+        <div class="header-context">
+            <div class="header-page-title">{titulo_pagina}</div>
+            <div class="header-subtitle">{subtitulo}</div>
+        </div>
     </div>
-    """
-    
-    st.markdown(header_html, unsafe_allow_html=True)
-    
-    # Botões ocultos do Streamlit para capturar os cliques do menu HTML
-    cols_nav = st.columns([2, 1, 1, 1, 1, 2])
-    for i, (key, label) in enumerate(pages):
-        if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type="primary" if pagina_atual == key else "secondary"):
-            st.session_state["pagina_atual"] = key
-            st.rerun()
+    """, unsafe_allow_html=True)
 
 # ==========================================================
-# 7. PÁGINAS
+# 7. PÁGINAS (Sem render_header interno, pois está centralizado no main)
 # ==========================================================
 def pagina_home():
     st.markdown("### 📈 Ibovespa")
@@ -704,26 +650,49 @@ def main():
     if "ticker_destino" not in st.session_state:
         st.session_state["ticker_destino"] = None
 
+    # Resolvendo a navegação a partir dos rankings
     if st.session_state.get("ticker_destino"):
         st.session_state["pagina_atual"] = "analise"
         ticker_destino_temp = st.session_state["ticker_destino"]
     else:
         ticker_destino_temp = None
 
-    # --- BLOCO ÚNICO: MENU + HEADER AGRUPADOS ---
-    pagina = st.session_state["pagina_atual"]
-    
-    ticker_dest = ticker_destino_temp
-    if not ticker_dest and pagina == "analise":
-        sel = st.session_state.get("sel_v2", "")
-        ticker_dest = sel.split(' - ')[0] if sel else None
+    # --- BLOCO ÚNICO: MENU + HEADER (O JS vai fixar este contêiner inteiro) ---
+    with st.container():
+        # MENU HORIZONTAL CENTRALIZADO
+        cols_nav = st.columns([2, 1, 1, 1, 1, 2])
+        pages = [
+            ("home", "🏠 Home"), 
+            ("analise", "🔍 Análise"), 
+            ("rankings", "🏆 Rankings"), 
+            ("comparativo", "📊 Comparativo")
+        ]
+        for i, (key, label) in enumerate(pages):
+            is_active = st.session_state["pagina_atual"] == key
+            btn_type = "primary" if is_active else "secondary"
+            if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
+                st.session_state["pagina_atual"] = key
+                st.rerun()
+                
+        st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+
+        # HEADER
+        pagina = st.session_state["pagina_atual"]
         
-    render_header_and_menu(pagina, ticker_dest)
+        # Prioriza o ticker de destino (vindo dos rankings), senão usa o do selectbox
+        ticker_dest = ticker_destino_temp
+        if not ticker_dest and pagina == "analise":
+            sel = st.session_state.get("sel_v2", "")
+            ticker_dest = sel.split(' - ')[0] if sel else None
+            
+        render_header(pagina, ticker_dest)
         
+    # Limpa o ticker_destino após o header ser renderizado corretamente
     if ticker_destino_temp:
         st.session_state["ticker_destino"] = None
 
     # CONTEÚDO DA PÁGINA
+    pagina = st.session_state["pagina_atual"]
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
     elif pagina == "rankings": pagina_rankings()
