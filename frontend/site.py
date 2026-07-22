@@ -279,7 +279,7 @@ def pagina_home():
         "isTransparent": false,
         "showSymbolLogo": true,
         "showFloatingTooltip": true,
-        "width": "960",
+        "width": "100%",
         "height": "550",
         "plotLineColorGrowing": "rgba(41, 98, 255, 1)",
         "plotLineColorFalling": "rgba(41, 98, 255, 1)",
