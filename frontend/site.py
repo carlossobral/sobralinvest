@@ -41,18 +41,26 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
-.header-container { 
-    display: flex; 
-    justify-content: space-between; 
-    align-items: center; 
-    border-bottom: 1px solid #334155; 
-    padding: 16px 0; 
-    margin-bottom: 24px; 
-    margin-top: -10px; 
-    position: sticky; /* TRAVA O HEADER NO TOPO */
-    top: 0; 
-    z-index: 1000; /* GARANTE QUE FIQUE ACIMA DOS OUTROS ELEMENTOS */
-    background-color: #0f172a; /* COR DE FUNDO PARA TAPAR O CONTEÚDO QUE ROLA EMBAIXO */
+/* Força o contêiner pai do Streamlit a ser o elemento "sticky" */
+div[data-testid="stMarkdownContainer"]:has(> .header-container) {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 1000 !important;
+    background-color: #0f172a !important;
+    padding-top: 16px !important;
+    padding-bottom: 16px !important;
+    margin-top: -10px !important;
+    margin-bottom: 24px !important;
+    border-bottom: 1px solid #334155 !important;
+}
+
+/* Ajusta o header container em si para não duplicar bordas e fundos */
+.header-container {
+    position: static !important;
+    border-bottom: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background-color: transparent !important;
 }
 .header-brand { display: flex; align-items: center; gap: 12px; }
 .header-brand-name { font-size: 1.4rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; line-height: 1.2; }
