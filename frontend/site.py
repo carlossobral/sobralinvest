@@ -45,30 +45,13 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-/* --- ESTADO NORMAL DO HEADER --- */
+/* Estilo base do header (o JS aplica o fundo e blur no wrapper pai) */
 .header-container {
-    position: relative !important;
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
     padding: 1rem 0 !important;
     margin: 0 !important;
-    background-color: var(--background-color, #0e1117) !important;
-    z-index: 9998;
+    background-color: transparent !important;
     width: 100%;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* --- ESTADO FIXO (ATIVADO PELO JS APÓS ROLAR) --- */
-.header-container.is-sticky {
-    position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 100% !important;
-    z-index: 9999 !important;
-    background-color: rgba(14, 17, 23, 0.95) !important;
-    backdrop-filter: blur(12px) !important;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
-    padding: 0.8rem 0 !important; /* Leve redução para ficar mais elegante */
-    border-bottom: 1px solid #334155 !important;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -102,79 +85,66 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 3. SCRIPT JAVASCRIPT DEFINITIVO (STICKY HEADER INTELIGENTE)
+# 3. SCRIPT JAVASCRIPT DEFINITIVO (Agrupa Menu + Header)
 # ==========================================================
 components.html("""
 <script>
 (function() {
-    // Previne execução múltipla
-    if (window.parent.headerStickyInitialized) return;
-    window.parent.headerStickyInitialized = true;
+    const parentWindow = window.parent;
+    if (parentWindow.headerFixedInitialized) return;
+    parentWindow.headerFixedInitialized = true;
 
-    const doc = window.parent.document;
+    const parentDoc = parentWindow.document;
 
-    function setupStickyHeader() {
-        const header = doc.querySelector('.header-container');
-        if (!header || header.dataset.stickySetup === "true") return;
+    function fixAppHeader() {
+        const header = parentDoc.querySelector('.header-container');
+        if (!header) return;
 
-        // 1. Cria o placeholder invisível para evitar o "pulo" de layout
-        const placeholder = doc.createElement('div');
-        placeholder.id = 'header-sticky-placeholder';
-        placeholder.style.display = 'none';
+        // Encontra o contêiner st.container() que engloba tanto o Menu quanto o Header
+        const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+        if (!wrapper || wrapper.dataset.fixed === "true") return;
+
+        // 1. Cria o placeholder para evitar que o conteúdo "pule" (Layout Shift)
+        const placeholder = parentDoc.createElement('div');
+        placeholder.id = 'app-placeholder';
+        placeholder.style.height = wrapper.offsetHeight + 'px';
         placeholder.style.width = '100%';
+        placeholder.style.flexShrink = '0'; // Previne colapso no flexbox do Streamlit
         
-        // Insere o placeholder IMEDIATAMENTE ANTES do header
-        header.parentNode.insertBefore(placeholder, header);
+        // 2. Insere o placeholder ANTES do wrapper
+        wrapper.parentNode.insertBefore(placeholder, wrapper);
 
-        // 2. Função que roda a cada rolagem
-        function onScroll() {
-            const rect = header.getBoundingClientRect();
-            
-            // Quando o topo do header toca o topo da tela (ou passa um pouco)
-            if (rect.top <= 0) {
-                if (!header.classList.contains('is-sticky')) {
-                    // Define a altura do placeholder exatamente como a do header AGORA
-                    placeholder.style.height = header.offsetHeight + 'px';
-                    placeholder.style.display = 'block';
-                    
-                    header.classList.add('is-sticky');
-                }
-            } else {
-                // Quando voltamos ao topo da página, remove o estado fixo
-                if (header.classList.contains('is-sticky')) {
-                    placeholder.style.display = 'none';
-                    header.classList.remove('is-sticky');
-                }
-            }
-        }
-
-        // 3. Adiciona o listener de scroll (passive para melhor performance)
-        doc.addEventListener('scroll', onScroll, { passive: true });
+        // 3. Aplica o estilo fixed diretamente no elemento pai (Wrapper)
+        wrapper.style.position = 'fixed';
+        wrapper.style.top = '0';
+        wrapper.style.left = '0';
+        wrapper.style.width = '100%';
+        wrapper.style.zIndex = '9999';
+        wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)'; // Fundo escuro semitransparente
+        wrapper.style.backdropFilter = 'blur(12px)';
+        wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
+        wrapper.style.paddingTop = '1rem';
+        wrapper.style.paddingBottom = '1rem';
+        wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
         
-        // Executa uma vez no início por segurança
-        onScroll();
-
-        // Marca como configurado
-        header.dataset.stickySetup = "true";
+        wrapper.dataset.fixed = "true";
     }
 
-    // Executa após um pequeno delay para garantir que o DOM do Streamlit carregou
-    setTimeout(setupStickyHeader, 300);
-
-    // 4. Observa mudanças no DOM (caso o Streamlit re-renderize a página)
-    const observer = new window.parent.MutationObserver(() => {
-        const header = doc.querySelector('.header-container');
-        if (header && header.dataset.stickySetup !== "true") {
-            // Se o Streamlit limpou o DOM, resetamos para reconfigurar
-            const oldPlaceholder = doc.getElementById('header-sticky-placeholder');
-            if (oldPlaceholder) oldPlaceholder.remove();
-            
-            header.dataset.stickySetup = "false";
-            setupStickyHeader();
+    // Executa após o DOM inicial carregar
+    setTimeout(fixAppHeader, 150);
+    
+    // Re-executa caso o Streamlit re-renderize a página (ex: troca de aba)
+    const observer = new parentWindow.MutationObserver(() => {
+        const header = parentDoc.querySelector('.header-container');
+        if (header) {
+            const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+            if (wrapper && wrapper.dataset.fixed !== "true") {
+                fixAppHeader();
+            }
         }
     });
     
-    observer.observe(doc.body, { childList: true, subtree: true });
+    observer.observe(parentDoc.body, { childList: true, subtree: true });
 })();
 </script>
 """, height=0, width=0)
@@ -340,7 +310,7 @@ def render_header(pagina, ticker_sel=None):
     """, unsafe_allow_html=True)
 
 # ==========================================================
-# 7. PÁGINAS
+# 7. PÁGINAS (Sem render_header interno, pois está centralizado no main)
 # ==========================================================
 def pagina_home():
     st.markdown("### 📈 Ibovespa")
@@ -674,41 +644,49 @@ def main():
     if "ticker_destino" not in st.session_state:
         st.session_state["ticker_destino"] = None
 
+    # Resolvendo a navegação a partir dos rankings
     if st.session_state.get("ticker_destino"):
         st.session_state["pagina_atual"] = "analise"
-        st.session_state["ticker_destino"] = None
+        ticker_destino_temp = st.session_state["ticker_destino"]
+    else:
+        ticker_destino_temp = None
 
-    # --- MENU HORIZONTAL CENTRALIZADO ---
-    cols_nav = st.columns([2, 1, 1, 1, 1, 2])
-    pages = [
-        ("home", "🏠 Home"), 
-        ("analise", "🔍 Análise"), 
-        ("rankings", "🏆 Rankings"), 
-        ("comparativo", "📊 Comparativo")
-    ]
-    for i, (key, label) in enumerate(pages):
-        is_active = st.session_state["pagina_atual"] == key
-        btn_type = "primary" if is_active else "secondary"
-        if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
-            st.session_state["pagina_atual"] = key
-            st.rerun()
-            
-    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    # --- BLOCO ÚNICO: MENU + HEADER (O JS vai fixar este contêiner inteiro) ---
+    with st.container():
+        # MENU HORIZONTAL CENTRALIZADO
+        cols_nav = st.columns([2, 1, 1, 1, 1, 2])
+        pages = [
+            ("home", "🏠 Home"), 
+            ("analise", "🔍 Análise"), 
+            ("rankings", "🏆 Rankings"), 
+            ("comparativo", "📊 Comparativo")
+        ]
+        for i, (key, label) in enumerate(pages):
+            is_active = st.session_state["pagina_atual"] == key
+            btn_type = "primary" if is_active else "secondary"
+            if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
+                st.session_state["pagina_atual"] = key
+                st.rerun()
+                
+        st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    # --- HEADER ---
-    pagina = st.session_state["pagina_atual"]
-    ticker_dest = None
-    if pagina == "analise":
-        df_temp = load_data()
-        if not df_temp.empty:
+        # HEADER
+        pagina = st.session_state["pagina_atual"]
+        
+        # Prioriza o ticker de destino (vindo dos rankings), senão usa o do selectbox
+        ticker_dest = ticker_destino_temp
+        if not ticker_dest and pagina == "analise":
             sel = st.session_state.get("sel_v2", "")
             ticker_dest = sel.split(' - ')[0] if sel else None
-    elif pagina == "home":
-        ticker_dest = None
+            
+        render_header(pagina, ticker_dest)
         
-    render_header(pagina, ticker_dest)
+    # Limpa o ticker_destino após o header ser renderizado corretamente
+    if ticker_destino_temp:
+        st.session_state["ticker_destino"] = None
 
-    # --- CONTEÚDO DA PÁGINA ---
+    # CONTEÚDO DA PÁGINA
+    pagina = st.session_state["pagina_atual"]
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
     elif pagina == "rankings": pagina_rankings()
