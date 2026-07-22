@@ -45,13 +45,7 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-/* HACK DEFINITIVO PARA O STICKY HEADER NO STREAMLIT */
-section[data-testid="stMain"] {
-    overflow: visible !important;
-}
-div[data-testid="stVerticalBlock"] {
-    overflow: visible !important;
-}
+/* HACK SEGURO PARA O STICKY HEADER NO STREAMLIT */
 div[data-testid="stMarkdownContainer"]:has(> .header-container) {
     position: -webkit-sticky !important;
     position: sticky !important;
@@ -338,16 +332,32 @@ def pagina_analise():
     df['Disp'] = (df['ticker'].astype(str).fillna('') + ' - ' + df['nome'].astype(str).fillna('')).astype(str)
     opts = sorted(df['Disp'].tolist())
     
-    sel = st.selectbox("Selecione o ativo", options=opts)
-    ticker = sel.split(' - ')[0]
+    # Pega o ticker atual do estado da sessão (se já foi renderizado uma vez)
+    current_sel = st.session_state.get("sel_v2")
+    current_ticker = current_sel.split(' - ')[0] if current_sel else None
     
-    render_header("analise", ticker)
+    # 1. RENDERIZA O HEADER PRIMEIRO
+    render_header("analise", current_ticker)
+    
+    # 2. RENDERIZA O SELECTBOX ABAIXO DO HEADER
+    # Se veio do ranking, define o índice inicial
+    idx = 0
+    if "ticker_destino" in st.session_state and st.session_state["ticker_destino"]:
+        for i, o in enumerate(opts):
+            if o.startswith(st.session_state["ticker_destino"] + ' -'):
+                idx = i
+                break
+        st.session_state.pop("ticker_destino", None)
+
+    sel = st.selectbox("Selecione o ativo", options=opts, index=idx, key="sel_v2")
+    ticker = sel.split(' - ')[0]
     
     st.markdown('<div class="c">', unsafe_allow_html=True)
     
     ativo = get_ativo_detalhado(ticker)
     if not ativo: return
 
+    # 3. RENDERIZA O BREADCRUMB ABAIXO DO SELECTBOX
     st.markdown(f"""
     <div style="display: flex; gap: 20px; margin: 8px 0 16px 0; align-items: center; flex-wrap: wrap;">
         <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase;">Setor</span><span style="font-size: 0.85rem; font-weight: 500; color: #f1f5f9; margin-left: 8px;">{ativo.get('setor', 'N/A')}</span></div>
