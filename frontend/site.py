@@ -275,8 +275,8 @@ def get_ativo_detalhado(ticker):
 # 6. HEADER UNIFICADO
 # ==========================================================
 def render_header(pagina, ticker_sel=None):
-    titulo_pagina = ""
-    subtitulo = ""
+    titulo_pagina = "SOBRAL Invest"
+    subtitulo = "Análise Fundamentalista & Valuation"
     
     if pagina == "home":
         titulo_pagina = "🏠 Home"
