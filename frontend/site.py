@@ -535,7 +535,7 @@ def pagina_rankings():
         render_ranking(df_filt, 'roe', 'Maiores ROE', lambda x: f"{x*100:.2f}%", cor_valor="#10b981")
     elif ranking_sel == "Maior Upside AGF":
         df_filt['upside_agf'] = ((df_filt['agf'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
-        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bva")
+        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bfa")
     elif ranking_sel == "Mais Baratas - Graham":
         df_filt['upside_graham'] = ((df_filt['graham'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
         render_ranking(df_filt, 'upside_graham', 'Mais Baratas - Graham', lambda x: f"{x:+.1f}%", cor_valor="#34d399")
