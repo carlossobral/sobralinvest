@@ -45,23 +45,31 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-/* HACK PARA O STICKY HEADER FUNCIONAR NO STREAMLIT */
-.header-container {
-    position: -webkit-sticky;
-    position: sticky;
-    top: 0;
-    z-index: 999;
-    background-color: #0f172a !important;
-    padding: 16px 0;
-    margin-top: -10px;
-    margin-bottom: 20px;
-    border-bottom: 1px solid #334155;
-}
-section[data-testid="stMain"] > div {
+/* HACK DEFINITIVO PARA O STICKY HEADER NO STREAMLIT */
+section[data-testid="stMain"] {
     overflow: visible !important;
 }
 div[data-testid="stVerticalBlock"] {
     overflow: visible !important;
+}
+div[data-testid="stMarkdownContainer"]:has(> .header-container) {
+    position: -webkit-sticky !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 999 !important;
+    background-color: var(--background-color, #0e1117) !important; /* USA A COR PADRÃO DO TEMA */
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+    margin-bottom: 1.5rem !important;
+    border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
+}
+
+.header-container {
+    position: static !important;
+    border-bottom: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background-color: transparent !important;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -70,6 +78,7 @@ div[data-testid="stVerticalBlock"] {
 .header-context { text-align: right; }
 .header-page-title { font-size: 1.1rem; font-weight: 600; color: #38bdf8; margin-bottom: 2px; }
 .header-subtitle { font-size: 0.8rem; color: #94a3b8; }
+
 .st { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; text-transform: uppercase; letter-spacing: 0.1em; margin: 40px 0 22px 0; padding-bottom: 10px; border-bottom: 2px solid #334155; display: flex; align-items: center; gap: 10px; }
 .mc { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 18px 16px; transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 100%; display: flex; flex-direction: column; justify-content: space-between; min-height: 95px; }
 .mc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.25); border-color: #3b82f6; }
@@ -79,6 +88,7 @@ div[data-testid="stVerticalBlock"] {
 .sn { font-size: 3.5rem; font-weight: 800; line-height: 1; margin-bottom: 8px; }
 .sl { font-size: 1.1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
 .sd { font-size: 0.8rem; color: #94a3b8; margin-top: 6px; }
+
 .ranking-card { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 4px 10px 14px 10px; margin-bottom: 0.75rem; transition: all 0.3s ease; text-align: center; height: 100%; }
 .ranking-card:hover { transform: translateY(-3px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); border-color: #3b82f6; }
 .ranking-nome { font-size: 0.72rem; color: #94a3b8; margin: 0 0 8px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
@@ -147,7 +157,6 @@ def tooltip(t):
     return f'<span class="tt"><span class="tt-i">?</span><span class="tt-t">{d}</span></span>' if d else ""
 
 def sem_color(label, val_str):
-    """Retorna a cor com base na lógica matemática do indicador."""
     try:
         val = float(str(val_str).replace('R$','').replace('x','').replace('%','').replace('+','').replace(',','').strip())
     except:
