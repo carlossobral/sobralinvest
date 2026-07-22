@@ -306,7 +306,7 @@ def pagina_home():
     }
       </script>
     </div>
-    """, height=520)
+    """, height=560)
 
 def pagina_analise():
     df = load_data()
