@@ -17,6 +17,7 @@ hide_menu_style = """
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         .stDeployButton {display: none;}
+        /* ESCONDE A SIDEBAR NATIVA DO STREAMLIT */
         section[data-testid="stSidebar"] { display: none !important; }
         button[kind="header"] { display: none !important; }
         </style>
@@ -32,47 +33,47 @@ def init_supabase():
     if not url or not key:
         st.error("Credenciais do Supabase não encontradas.")
         st.stop()
-        return None
     return create_client(url, key)
 
 supabase = init_supabase()
 
 # ==========================================================
-# 2. CSS GLOBAL (TEMA ESCURO, CARDS E TOOLTIPS)
+# 2. CSS GLOBAL E JAVASCRIPT (STICKY HEADER HÍBRIDO)
 # ==========================================================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-/* --- SOLUÇÃO STICKY HEADER VIA JS (Fixed + Placeholder) --- */
+/* CLASSE BASE DO HEADER */
 .header-container {
-    position: relative !important; /* Estado normal */
-    border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
-    padding: 1rem 0 !important;
-    margin: 0 !important;
-    background-color: var(--background-color, #0e1117) !important;
-    z-index: 9998;
-    transition: box-shadow 0.3s ease;
+    transition: all 0.3s ease;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 16px 0;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid #334155;
+    background-color: var(--background-color, #0e1117);
 }
 
-/* Estado fixo aplicado pelo JavaScript */
+/* CLASSE APLICADA VIA JS QUANDO ROLA A PÁGINA */
 .header-container.is-sticky {
     position: fixed !important;
-    top: 0 !important;
-    left: 0 !important;
-    width: 100% !important;
+    top: 0;
+    left: 0;
     z-index: 9999 !important;
-    background-color: rgba(14, 17, 23, 0.95) !important; /* Leve transparência */
-    backdrop-filter: blur(8px) !important;
     box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
-    padding: 0.8rem 0 !important; /* Leve redução no padding ao ficar fixo */
     animation: slideDown 0.3s ease-out;
 }
 
 @keyframes slideDown {
     from { transform: translateY(-100%); }
     to { transform: translateY(0); }
+}
+
+/* PLACEHOLDER PARA EVITAR O PULO DE LAYOUT */
+.header-placeholder {
+    display: none;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -98,6 +99,7 @@ st.markdown("""
 .ranking-valor { font-size: 1.35rem; font-weight: 800; color: #38bdf8; margin: 6px 0; line-height: 1.1; }
 .ranking-footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; }
 
+/* CSS DO TOOLTIP CORRIGIDO */
 .tt { position: relative; display: inline-block; cursor: help; vertical-align: middle; }
 .tt-i { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: #475569; color: #f1f5f9; font-size: 10px; font-weight: 700; margin-left: 4px; }
 .tt-t { visibility: hidden; opacity: 0; width: 250px; background-color: #1e293b; border: 1px solid #475569; color: #e2e8f0; text-align: left; border-radius: 6px; padding: 10px; position: absolute; z-index: 9999; top: 20px; left: 50%; transform: translateX(-50%); transition: opacity 0.3s ease; font-size: 0.8rem; line-height: 1.4; box-shadow: 0 4px 6px rgba(0,0,0,0.3); pointer-events: none; }
@@ -105,59 +107,55 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ==========================================================
-# 3. SCRIPT JAVASCRIPT PARA STICKY HEADER (Bypass do Overflow do Streamlit)
-# ==========================================================
-sticky_header_js = """
+# SCRIPT JAVASCRIPT PARA O STICKY HEADER
+components.html("""
 <script>
-(function() {
-    // Previne múltiplas inicializações
-    if (window.stickyHeaderInitialized) return;
-    
-    function initSticky() {
-        const header = document.querySelector('.header-container');
-        if (!header) return;
-        
-        // Cria um placeholder invisível para evitar que o conteúdo "pule" quando o header ficar fixed
-        let placeholder = document.getElementById('header-placeholder');
-        if (!placeholder) {
-            placeholder = document.createElement('div');
-            placeholder.id = 'header-placeholder';
-            placeholder.style.display = 'none';
-            // Insere o placeholder imediatamente antes do header
-            header.parentNode.insertBefore(placeholder, header);
-        }
+function setupStickyHeader() {
+    const header = document.querySelector('.header-container');
+    if (!header) return;
 
-        window.addEventListener('scroll', function() {
-            const rect = header.getBoundingClientRect();
-            // Quando o topo do header está prestes a sair da viewport (buffer de 10px)
-            if (rect.top <= 10) {
-                if (!header.classList.contains('is-sticky')) {
-                    placeholder.style.height = rect.height + 'px';
-                    placeholder.style.display = 'block';
-                    header.classList.add('is-sticky');
-                }
-            } else {
-                if (header.classList.contains('is-sticky')) {
-                    placeholder.style.display = 'none';
-                    header.classList.remove('is-sticky');
-                }
-            }
-        });
-        
-        window.stickyHeaderInitialized = true;
+    let placeholder = document.querySelector('.header-placeholder');
+    if (!placeholder) {
+        placeholder = document.createElement('div');
+        placeholder.className = 'header-placeholder';
+        header.parentNode.insertBefore(placeholder, header.nextSibling);
     }
 
-    // Executa imediatamente e monitora mudanças no DOM (Streamlit re-renderiza)
-    initSticky();
-    setInterval(initSticky, 1000); 
-})();
+    function handleScroll() {
+        // Calcula a altura total do header + margem
+        const headerHeight = header.offsetHeight + 24; // 24px de margem inferior original
+        
+        if (window.scrollY > 50) { // Dispara após rolar 50px
+            if (!header.classList.contains('is-sticky')) {
+                header.classList.add('is-sticky');
+                placeholder.style.height = headerHeight + 'px';
+                placeholder.style.display = 'block';
+            }
+        } else {
+            if (header.classList.contains('is-sticky')) {
+                header.classList.remove('is-sticky');
+                placeholder.style.display = 'none';
+            }
+        }
+    }
+
+    // O Streamlit pode demorar para renderizar, então ouvimos a janela inteira
+    window.removeEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleScroll);
+}
+
+// Tenta configurar a cada 1 segundo até encontrar o header (garante que o Streamlit carregou)
+const intervalId = setInterval(() => {
+    if (document.querySelector('.header-container')) {
+        setupStickyHeader();
+        clearInterval(intervalId);
+    }
+}, 500);
 </script>
-"""
-components.html(sticky_header_js, height=0, width=0)
+""", height=0)
 
 # ==========================================================
-# 4. TOOLTIPS E FUNÇÕES AUXILIARES
+# 3. TOOLTIPS E FUNÇÕES AUXILIARES
 # ==========================================================
 TOOLTIPS = {
     "P/L": "Preço sobre o Lucro. Demonstra quanto o mercado está disposto a pagar pelos lucros da empresa.",
@@ -226,7 +224,7 @@ def sem_color(label, val_str):
     return "#38bdf8"
 
 # ==========================================================
-# 5. FUNÇÕES DE DADOS
+# 4. FUNÇÕES DE DADOS
 # ==========================================================
 @st.cache_data(ttl=3600)
 def load_data():
@@ -282,7 +280,7 @@ def get_ativo_detalhado(ticker):
     return emp
 
 # ==========================================================
-# 6. HEADER UNIFICADO
+# 5. HEADER UNIFICADO
 # ==========================================================
 def render_header(pagina, ticker_sel=None):
     titulo_pagina = ""
@@ -317,7 +315,7 @@ def render_header(pagina, ticker_sel=None):
     """, unsafe_allow_html=True)
 
 # ==========================================================
-# 7. PÁGINAS
+# 6. PÁGINAS
 # ==========================================================
 def pagina_home():
     render_header("home")
@@ -391,10 +389,21 @@ def pagina_analise():
     df['Disp'] = (df['ticker'].astype(str).fillna('') + ' - ' + df['nome'].astype(str).fillna('')).astype(str)
     opts = sorted(df['Disp'].tolist())
     
-    sel = st.selectbox("Selecione o ativo", options=opts)
-    ticker = sel.split(' - ')[0]
+    current_sel = st.session_state.get("sel_v2")
+    current_ticker = current_sel.split(' - ')[0] if current_sel else None
     
-    render_header("analise", ticker)
+    render_header("analise", current_ticker)
+    
+    idx = 0
+    if "ticker_destino" in st.session_state and st.session_state["ticker_destino"]:
+        for i, o in enumerate(opts):
+            if o.startswith(st.session_state["ticker_destino"] + ' -'):
+                idx = i
+                break
+        st.session_state.pop("ticker_destino", None)
+
+    sel = st.selectbox("Selecione o ativo", options=opts, index=idx, key="sel_v2")
+    ticker = sel.split(' - ')[0]
     
     st.markdown('<div class="c">', unsafe_allow_html=True)
     
@@ -639,7 +648,7 @@ def pagina_comparativo():
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================================
-# 8. ROTEADOR PRINCIPAL
+# 7. ROTEADOR PRINCIPAL
 # ==========================================================
 def main():
     if "pagina_atual" not in st.session_state:
@@ -652,6 +661,7 @@ def main():
         st.session_state["ticker_destino"] = None
 
     # --- MENU HORIZONTAL CENTRALIZADO ---
+    # Colunas vazias nas pontas para forçar o centro
     cols_nav = st.columns([2, 1, 1, 1, 1, 2])
     pages = [
         ("home", "🏠 Home"), 
@@ -662,10 +672,12 @@ def main():
     for i, (key, label) in enumerate(pages):
         is_active = st.session_state["pagina_atual"] == key
         btn_type = "primary" if is_active else "secondary"
+        # Os botões vão para as colunas 1, 2, 3 e 4 (índices 1 a 4)
         if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
             st.session_state["pagina_atual"] = key
             st.rerun()
             
+    # Espaço entre o menu e o header
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
     pagina = st.session_state["pagina_atual"]
