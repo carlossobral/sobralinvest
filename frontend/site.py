@@ -45,15 +45,30 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-/* Estilo base do header (será manipulado pelo JS abaixo) */
+/* --- ESTADO NORMAL DO HEADER --- */
 .header-container {
+    position: relative !important;
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
     padding: 1rem 0 !important;
     margin: 0 !important;
     background-color: var(--background-color, #0e1117) !important;
-    z-index: 9999;
-    transition: all 0.3s ease;
+    z-index: 9998;
     width: 100%;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* --- ESTADO FIXO (ATIVADO PELO JS APÓS ROLAR) --- */
+.header-container.is-sticky {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    z-index: 9999 !important;
+    background-color: rgba(14, 17, 23, 0.95) !important;
+    backdrop-filter: blur(12px) !important;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+    padding: 0.8rem 0 !important; /* Leve redução para ficar mais elegante */
+    border-bottom: 1px solid #334155 !important;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -87,61 +102,79 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 3. SCRIPT JAVASCRIPT DEFINITIVO (Acessa o Parent Document)
+# 3. SCRIPT JAVASCRIPT DEFINITIVO (STICKY HEADER INTELIGENTE)
 # ==========================================================
 components.html("""
 <script>
 (function() {
-    // Acessa a janela pai (o Streamlit em si), pois components.html roda em um iframe
-    const parentWindow = window.parent;
-    if (parentWindow.headerFixedInitialized) return;
-    parentWindow.headerFixedInitialized = true;
+    // Previne execução múltipla
+    if (window.parent.headerStickyInitialized) return;
+    window.parent.headerStickyInitialized = true;
 
-    const parentDoc = parentWindow.document;
+    const doc = window.parent.document;
 
-    function fixHeader() {
-        const header = parentDoc.querySelector('.header-container');
-        if (!header) return;
+    function setupStickyHeader() {
+        const header = doc.querySelector('.header-container');
+        if (!header || header.dataset.stickySetup === "true") return;
 
-        // Se já foi processado, não faz nada
-        if (header.dataset.fixed === "true") return;
-
-        // 1. Cria o placeholder para evitar que o conteúdo "pule"
-        const placeholder = parentDoc.createElement('div');
-        placeholder.id = 'header-placeholder';
-        placeholder.style.height = header.offsetHeight + 'px';
+        // 1. Cria o placeholder invisível para evitar o "pulo" de layout
+        const placeholder = doc.createElement('div');
+        placeholder.id = 'header-sticky-placeholder';
+        placeholder.style.display = 'none';
         placeholder.style.width = '100%';
         
-        // 2. Insere o placeholder ANTES do header
+        // Insere o placeholder IMEDIATAMENTE ANTES do header
         header.parentNode.insertBefore(placeholder, header);
 
-        // 3. Aplica o estilo fixed diretamente no elemento
-        header.style.position = 'fixed';
-        header.style.top = '0';
-        header.style.left = '0';
-        header.style.width = '100%';
-        header.style.zIndex = '9999';
-        header.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
-        header.style.backdropFilter = 'blur(8px)';
-        header.style.boxShadow = '0 4px 12px rgba(0,0,0,0.4)';
-        header.style.padding = '0.8rem 0';
+        // 2. Função que roda a cada rolagem
+        function onScroll() {
+            const rect = header.getBoundingClientRect();
+            
+            // Quando o topo do header toca o topo da tela (ou passa um pouco)
+            if (rect.top <= 0) {
+                if (!header.classList.contains('is-sticky')) {
+                    // Define a altura do placeholder exatamente como a do header AGORA
+                    placeholder.style.height = header.offsetHeight + 'px';
+                    placeholder.style.display = 'block';
+                    
+                    header.classList.add('is-sticky');
+                }
+            } else {
+                // Quando voltamos ao topo da página, remove o estado fixo
+                if (header.classList.contains('is-sticky')) {
+                    placeholder.style.display = 'none';
+                    header.classList.remove('is-sticky');
+                }
+            }
+        }
+
+        // 3. Adiciona o listener de scroll (passive para melhor performance)
+        doc.addEventListener('scroll', onScroll, { passive: true });
         
-        // Marca como processado
-        header.dataset.fixed = "true";
+        // Executa uma vez no início por segurança
+        onScroll();
+
+        // Marca como configurado
+        header.dataset.stickySetup = "true";
     }
 
-    // Executa imediatamente
-    fixHeader();
-    
-    // Re-executa caso o Streamlit re-renderize a página
-    const observer = new parentWindow.MutationObserver(() => {
-        const header = parentDoc.querySelector('.header-container');
-        if (header && header.dataset.fixed !== "true") {
-            fixHeader();
+    // Executa após um pequeno delay para garantir que o DOM do Streamlit carregou
+    setTimeout(setupStickyHeader, 300);
+
+    // 4. Observa mudanças no DOM (caso o Streamlit re-renderize a página)
+    const observer = new window.parent.MutationObserver(() => {
+        const header = doc.querySelector('.header-container');
+        if (header && header.dataset.stickySetup !== "true") {
+            // Se o Streamlit limpou o DOM, resetamos para reconfigurar
+            const oldPlaceholder = doc.getElementById('header-sticky-placeholder');
+            if (oldPlaceholder) oldPlaceholder.remove();
+            
+            header.dataset.stickySetup = "false";
+            setupStickyHeader();
         }
     });
     
-    observer.observe(parentDoc.body, { childList: true, subtree: true });
+    observer.observe(doc.body, { childList: true, subtree: true });
 })();
 </script>
 """, height=0, width=0)
@@ -275,8 +308,8 @@ def get_ativo_detalhado(ticker):
 # 6. HEADER UNIFICADO
 # ==========================================================
 def render_header(pagina, ticker_sel=None):
-    titulo_pagina = "SOBRAL Invest"
-    subtitulo = "Análise Fundamentalista & Valuation"
+    titulo_pagina = ""
+    subtitulo = ""
     
     if pagina == "home":
         titulo_pagina = "🏠 Home"
@@ -310,8 +343,6 @@ def render_header(pagina, ticker_sel=None):
 # 7. PÁGINAS
 # ==========================================================
 def pagina_home():
-    render_header("home")
-    
     st.markdown("### 📈 Ibovespa")
     components.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""", height=420)
     
@@ -374,7 +405,6 @@ def pagina_home():
 def pagina_analise():
     df = load_data()
     if df.empty:
-        render_header("analise")
         st.warning("Dados não disponíveis.")
         return
         
@@ -383,8 +413,6 @@ def pagina_analise():
     
     current_sel = st.session_state.get("sel_v2")
     current_ticker = current_sel.split(' - ')[0] if current_sel else None
-    
-    render_header("analise", current_ticker)
     
     idx = 0
     if "ticker_destino" in st.session_state and st.session_state["ticker_destino"]:
@@ -511,7 +539,6 @@ def pagina_analise():
     st.markdown('</div>', unsafe_allow_html=True)
 
 def pagina_rankings():
-    render_header("rankings")
     df = load_data()
     if df.empty: return
 
@@ -619,7 +646,6 @@ def pagina_rankings():
         render_ranking(df_filt, 'score', 'Maiores Scores 3.0', lambda x: f"{x:.0f}", cor_valor="#10b981")
 
 def pagina_comparativo():
-    render_header("comparativo")
     df = load_data()
     if df.empty: return
 
@@ -669,7 +695,20 @@ def main():
             
     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
+    # --- HEADER ---
     pagina = st.session_state["pagina_atual"]
+    ticker_dest = None
+    if pagina == "analise":
+        df_temp = load_data()
+        if not df_temp.empty:
+            sel = st.session_state.get("sel_v2", "")
+            ticker_dest = sel.split(' - ')[0] if sel else None
+    elif pagina == "home":
+        ticker_dest = None
+        
+    render_header(pagina, ticker_dest)
+
+    # --- CONTEÚDO DA PÁGINA ---
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
     elif pagina == "rankings": pagina_rankings()
