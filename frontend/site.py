@@ -10,13 +10,16 @@ import plotly.graph_objects as go
 # ==========================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CONEXÃO SUPABASE
 # ==========================================================
-st.set_page_config(page_title="Sobral Invest", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Sobral Invest", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
 
 hide_menu_style = """
         <style>
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         .stDeployButton {display: none;}
+        /* ESCONDE A SIDEBAR NATIVA DO STREAMLIT */
+        section[data-testid="stSidebar"] { display: none !important; }
+        button[kind="header"] { display: none !important; }
         </style>
         """
 st.markdown(hide_menu_style, unsafe_allow_html=True)
@@ -30,36 +33,34 @@ def init_supabase():
     if not url or not key:
         st.error("Credenciais do Supabase não encontradas.")
         st.stop()
+        return None
     return create_client(url, key)
 
 supabase = init_supabase()
 
 # ==========================================================
-# 2. CSS GLOBAL (TEMA ESCURO, CARDS E TOOLTIPS CORRIGIDOS)
+# 2. CSS GLOBAL (TEMA ESCURO, CARDS E TOOLTIPS)
 # ==========================================================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
-.header-container { 
-    display: flex; 
-    justify-content: space-between; 
-    align-items: center; 
-    border-bottom: 1px solid #334155; 
-    padding: 16px 0; 
-    margin-bottom: 24px; 
-    margin-top: -10px; 
-    position: sticky; /* TRAVA O HEADER NO TOPO */
-    top: 0; 
-    z-index: 1000; /* GARANTE QUE FIQUE ACIMA DOS OUTROS ELEMENTOS */
-    background-color: #0f172a; /* COR DE FUNDO PARA TAPAR O CONTEÚDO QUE ROLA EMBAIXO */
+
+.header-container {
+    border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
+    padding: 1rem 0 !important;
+    margin: 0 !important;
+    background-color: var(--background-color, #0e1117) !important;
+    width: 100%;
 }
+
 .header-brand { display: flex; align-items: center; gap: 12px; }
 .header-brand-name { font-size: 1.4rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; line-height: 1.2; }
 .header-brand-tag { font-size: 0.75rem; color: #64748b; font-weight: 500; }
 .header-context { text-align: right; }
 .header-page-title { font-size: 1.1rem; font-weight: 600; color: #38bdf8; margin-bottom: 2px; }
 .header-subtitle { font-size: 0.8rem; color: #94a3b8; }
+
 .st { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; text-transform: uppercase; letter-spacing: 0.1em; margin: 40px 0 22px 0; padding-bottom: 10px; border-bottom: 2px solid #334155; display: flex; align-items: center; gap: 10px; }
 .mc { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 18px 16px; transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 100%; display: flex; flex-direction: column; justify-content: space-between; min-height: 95px; }
 .mc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.25); border-color: #3b82f6; }
@@ -69,17 +70,13 @@ st.markdown("""
 .sn { font-size: 3.5rem; font-weight: 800; line-height: 1; margin-bottom: 8px; }
 .sl { font-size: 1.1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
 .sd { font-size: 0.8rem; color: #94a3b8; margin-top: 6px; }
+
 .ranking-card { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 4px 10px 14px 10px; margin-bottom: 0.75rem; transition: all 0.3s ease; text-align: center; height: 100%; }
 .ranking-card:hover { transform: translateY(-3px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); border-color: #3b82f6; }
 .ranking-nome { font-size: 0.72rem; color: #94a3b8; margin: 0 0 8px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
 .ranking-valor { font-size: 1.35rem; font-weight: 800; color: #38bdf8; margin: 6px 0; line-height: 1.1; }
 .ranking-footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; }
-div[data-testid="stSidebar"] div.stButton > button { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%) !important; border: 1px solid #334155 !important; border-radius: 10px !important; padding: 12px 16px !important; margin: 6px 0 !important; color: #e2e8f0 !important; font-weight: 600 !important; width: 100% !important; text-align: left !important; }
-div[data-testid="stSidebar"] div.stButton > button:hover { border-color: #60a5fa !important; transform: translateX(4px) !important; }
-div[data-testid="stSidebar"] div.stButton > button[kind="primary"] { background: linear-gradient(145deg, #1e3a8a 0%, #1e40af 100%) !important; border-color: #3b82f6 !important; color: #ffffff !important; }
-div[data-testid="stButton"] > button[kind="secondary"] { background: transparent !important; border: none !important; padding: 0 !important; color: #38bdf8 !important; text-decoration: underline !important; font-size: 1.1rem !important; font-weight: 800 !important; cursor: pointer !important; width: auto !important; min-width: 0 !important; box-shadow: none !important; margin: 0 auto 4px auto !important; display: block !important; }
 
-/* CSS DO TOOLTIP CORRIGIDO */
 .tt { position: relative; display: inline-block; cursor: help; vertical-align: middle; }
 .tt-i { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: #475569; color: #f1f5f9; font-size: 10px; font-weight: 700; margin-left: 4px; }
 .tt-t { visibility: hidden; opacity: 0; width: 250px; background-color: #1e293b; border: 1px solid #475569; color: #e2e8f0; text-align: left; border-radius: 6px; padding: 10px; position: absolute; z-index: 9999; top: 20px; left: 50%; transform: translateX(-50%); transition: opacity 0.3s ease; font-size: 0.8rem; line-height: 1.4; box-shadow: 0 4px 6px rgba(0,0,0,0.3); pointer-events: none; }
@@ -141,24 +138,20 @@ def tooltip(t):
     return f'<span class="tt"><span class="tt-i">?</span><span class="tt-t">{d}</span></span>' if d else ""
 
 def sem_color(label, val_str):
-    """Retorna a cor com base na lógica matemática do indicador."""
     try:
-        # Limpa a string para extrair o número
         val = float(str(val_str).replace('R$','').replace('x','').replace('%','').replace('+','').replace(',','').strip())
     except:
-        return "#94a3b8" # Cinza se não conseguir converter
+        return "#94a3b8"
     
     l = label.lower()
     
-    # Indicadores onde MENOR é melhor (Valuation e Endividamento)
     if any(k in l for k in ["p/l", "p/vp", "ev/ebit", "ev/ebitda", "dív. líq", "passivo/ativos", "p/receita", "p/ativo", "p/cap", "p/ebit", "p/ativo circ"]):
         return "#10b981" if val < 10 else ("#f59e0b" if val < 20 else "#ef4444")
         
-    # Indicadores onde MAIOR é melhor (Rentabilidade, Crescimento, Liquidez)
     if any(k in l for k in ["roe", "roic", "roa", "margem", "dy", "cagr", "giro", "patrimonio/ativos", "liq. corrente", "cobertura"]):
         return "#10b981" if val > 15 else ("#f59e0b" if val > 5 else "#ef4444")
         
-    return "#38bdf8" # Azul padrão para LPA, VPA, etc (não há regra de bom/ruim direta)
+    return "#38bdf8"
 
 # ==========================================================
 # 4. FUNÇÕES DE DADOS
@@ -181,7 +174,6 @@ def load_data():
     df = df_score.merge(df_emp, on="ticker", how="left")
     df = df.merge(df_ind, on="ticker", how="left")
     
-    # Buscar cotação mais recente
     resp_cot_date = supabase.table("cotacoes").select("data").order("data", desc=True).limit(1).execute()
     if resp_cot_date.data:
         latest_date = resp_cot_date.data[0]['data']
@@ -197,7 +189,6 @@ def load_data():
     return df
 
 @st.cache_data(ttl=3600)
-
 def get_ativo_detalhado(ticker):
     emp = supabase.table("empresas").select("*").eq("ticker", ticker).execute().data
     if not emp: return None
@@ -257,53 +248,61 @@ def render_header(pagina, ticker_sel=None):
 # 6. PÁGINAS
 # ==========================================================
 def pagina_home():
-    render_header("home")
-    
-    # 1. Widget do Ibovespa
     st.markdown("### 📈 Ibovespa")
     components.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""", height=420)
     
-    # 2. Widget de Maiores Altas e Baixas (Market Movers)
     st.markdown("### 🚀 Maiores Altas e Baixas (B3)")
     components.html("""
     <div class="tradingview-widget-container">
       <div class="tradingview-widget-container__widget"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-market-movers.js" async>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-hotlists.js" async>
       {
-      "colorTheme": "dark",
-      "dateRange": "1D",
-      "showChart": true,
-      "locale": "br",
-      "width": "100%",
-      "height": "500",
-      "largeChartUrl": "",
-      "isTransparent": false,
-      "showSymbolLogo": true,
-      "showFloatingTooltip": false,
-      "plotLineColorGrowing": "rgba(41, 98, 255, 1)",
-      "plotLineColorFalling": "rgba(41, 98, 255, 1)",
-      "gridLineColor": "rgba(240, 243, 250, 0)",
-      "scaleFontColor": "rgba(219, 234, 254, 1)",
-      "belowLineFillColorGrowing": "rgba(41, 98, 255, 0.12)",
-      "belowLineFillColorFalling": "rgba(41, 98, 255, 0.12)",
-      "symbolActiveColor": "rgba(41, 98, 255, 0.12)",
-      "tabs": [
-        {
-          "title": "Maiores Altas",
-          "symbols": {
-            "proName": "BMFBOVESPA"
+        "colorTheme": "dark",
+        "dateRange": "1D",
+        "exchange": "BMFBOVESPA",
+        "showChart": true,
+        "locale": "br",
+        "largeChartUrl": "",
+        "isTransparent": false,
+        "showSymbolLogo": true,
+        "showFloatingTooltip": true,
+        "width": "100%",
+        "height": "550",
+        "plotLineColorGrowing": "rgba(41, 98, 255, 1)",
+        "plotLineColorFalling": "rgba(41, 98, 255, 1)",
+        "plotLineColorGrowingBottom": "rgba(41, 98, 255, 0)",
+        "plotLineColorFallingBottom": "rgba(41, 98, 255, 0)",
+        "gridLineColor": "rgba(42, 46, 57, 0)",
+        "scaleFontColor": "rgba(120, 123, 134, 1)",
+        "belowLineFillColorGrowing": "rgba(41, 98, 255, 0.12)",
+        "belowLineFillColorFalling": "rgba(41, 98, 255, 0.12)",
+        "belowLineFillColorGrowingBottom": "rgba(41, 98, 255, 0)",
+        "belowLineFillColorFallingBottom": "rgba(41, 98, 255, 0)",
+        "symbolActiveColor": "rgba(41, 98, 255, 0.12)",
+        "tabs": [
+          {
+            "title": "Mais Negociadas",
+            "symbols": [
+              { "s": "BMFBOVESPA:PETR4", "d": "Petrobras" },
+              { "s": "BMFBOVESPA:VALE3", "d": "Vale" },
+              { "s": "BMFBOVESPA:ITUB4", "d": "Itau Unibanco" },
+              { "s": "BMFBOVESPA:BBDC4", "d": "Bradesco" },
+              { "s": "BMFBOVESPA:ABEV3", "d": "Ambev" },
+              { "s": "BMFBOVESPA:WEGE3", "d": "Weg" },
+              { "s": "BMFBOVESPA:BBAS3", "d": "Banco do Brasil" }
+            ],
+            "originalTitle": "Equities"
           },
-          "list": "topGainers"
-        },
-        {
-          "title": "Maiores Baixas",
-          "symbols": {
-            "proName": "BMFBOVESPA"
+          {
+            "title": "Maiores Altas",
+            "symbols": [{ "s": "BMFBOVESPA:IBOV", "d": "Ibovespa" }]
           },
-          "list": "topLosers"
-        }
-      ]
-    }
+          {
+            "title": "Maiores Baixas",
+            "symbols": [{ "s": "BMFBOVESPA:IBOV", "d": "Ibovespa" }]
+          }
+        ]
+      }
       </script>
     </div>
     """, height=560)
@@ -311,24 +310,31 @@ def pagina_home():
 def pagina_analise():
     df = load_data()
     if df.empty:
-        render_header("analise")
         st.warning("Dados não disponíveis.")
         return
         
     df['Disp'] = (df['ticker'].astype(str).fillna('') + ' - ' + df['nome'].astype(str).fillna('')).astype(str)
     opts = sorted(df['Disp'].tolist())
     
-    sel = st.selectbox("Selecione o ativo", options=opts)
-    ticker = sel.split(' - ')[0]
+    current_sel = st.session_state.get("sel_v2")
+    current_ticker = current_sel.split(' - ')[0] if current_sel else None
     
-    render_header("analise", ticker)
+    idx = 0
+    if "ticker_destino" in st.session_state and st.session_state["ticker_destino"]:
+        for i, o in enumerate(opts):
+            if o.startswith(st.session_state["ticker_destino"] + ' -'):
+                idx = i
+                break
+        st.session_state.pop("ticker_destino", None)
+
+    sel = st.selectbox("Selecione o ativo", options=opts, index=idx, key="sel_v2")
+    ticker = sel.split(' - ')[0]
     
     st.markdown('<div class="c">', unsafe_allow_html=True)
     
     ativo = get_ativo_detalhado(ticker)
     if not ativo: return
 
-    # Cabeçalho Setor > SubSetor > Segmento
     st.markdown(f"""
     <div style="display: flex; gap: 20px; margin: 8px 0 16px 0; align-items: center; flex-wrap: wrap;">
         <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase;">Setor</span><span style="font-size: 0.85rem; font-weight: 500; color: #f1f5f9; margin-left: 8px;">{ativo.get('setor', 'N/A')}</span></div>
@@ -349,7 +355,7 @@ def pagina_analise():
                 i = r * cols + c
                 if i < len(data):
                     lbl, val = data[i]
-                    cl = sem_color(lbl, val) # Aplica a cor dinâmica
+                    cl = sem_color(lbl, val)
                     cs[c].markdown(f"""<div class="mc" style="border-left: 4px solid {cl};"><div class="ml">{lbl} {tooltip(lbl)}</div><div class="mv" style="color: {cl};">{val}</div></div>""", unsafe_allow_html=True)
 
     sec("Valuation", [
@@ -438,7 +444,6 @@ def pagina_analise():
     st.markdown('</div>', unsafe_allow_html=True)
 
 def pagina_rankings():
-    render_header("rankings")
     df = load_data()
     if df.empty: return
 
@@ -523,7 +528,7 @@ def pagina_rankings():
         render_ranking(df_filt, 'roe', 'Maiores ROE', lambda x: f"{x*100:.2f}%", cor_valor="#10b981")
     elif ranking_sel == "Maior Upside AGF":
         df_filt['upside_agf'] = ((df_filt['agf'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
-        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bva")
+        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bfa")
     elif ranking_sel == "Mais Baratas - Graham":
         df_filt['upside_graham'] = ((df_filt['graham'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
         render_ranking(df_filt, 'upside_graham', 'Mais Baratas - Graham', lambda x: f"{x:+.1f}%", cor_valor="#34d399")
@@ -546,7 +551,6 @@ def pagina_rankings():
         render_ranking(df_filt, 'score', 'Maiores Scores 3.0', lambda x: f"{x:.0f}", cor_valor="#10b981")
 
 def pagina_comparativo():
-    render_header("comparativo")
     df = load_data()
     if df.empty: return
 
@@ -575,28 +579,42 @@ def main():
     if "ticker_destino" not in st.session_state:
         st.session_state["ticker_destino"] = None
 
-    with st.sidebar:
-        st.markdown("<div style='font-size: 1.1rem; font-weight: 700; color: #f1f5f9; margin-bottom: 12px;'>Navegação</div>", unsafe_allow_html=True)
-        pages = [
-            ("home", "🏠 Home"), 
-            ("analise", "🔍 Análise"), 
-            ("rankings", "🏆 Rankings"), 
-            ("comparativo", "📊 Comparativo")
-        ]
-        for key, label in pages:
-            is_active = st.session_state["pagina_atual"] == key
-            btn_type = "primary" if is_active else "secondary"
-            if st.button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
-                st.session_state["pagina_atual"] = key
-                st.rerun()
-
-    pagina = st.session_state["pagina_atual"]
-    
-    # Se veio de um clique no ranking, força ir para análise
     if st.session_state.get("ticker_destino"):
-        pagina = "analise"
-        st.session_state["ticker_destino"] = None # Limpa para não travar nela
+        st.session_state["pagina_atual"] = "analise"
+        ticker_destino_temp = st.session_state["ticker_destino"]
+    else:
+        ticker_destino_temp = None
 
+    # --- MENU HORIZONTAL CENTRALIZADO ACIMA DO HEADER ---
+    cols_nav = st.columns([2, 1, 1, 1, 1, 2])
+    pages = [
+        ("home", "🏠 Home"), 
+        ("analise", "🔍 Análise"), 
+        ("rankings", "🏆 Rankings"), 
+        ("comparativo", "📊 Comparativo")
+    ]
+    for i, (key, label) in enumerate(pages):
+        is_active = st.session_state["pagina_atual"] == key
+        btn_type = "primary" if is_active else "secondary"
+        if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
+            st.session_state["pagina_atual"] = key
+            st.rerun()
+            
+    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+
+    # --- HEADER ---
+    pagina = st.session_state["pagina_atual"]
+    ticker_dest = ticker_destino_temp
+    if not ticker_dest and pagina == "analise":
+        sel = st.session_state.get("sel_v2", "")
+        ticker_dest = sel.split(' - ')[0] if sel else None
+        
+    render_header(pagina, ticker_dest)
+        
+    if ticker_destino_temp:
+        st.session_state["ticker_destino"] = None
+
+    # CONTEÚDO DA PÁGINA
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
     elif pagina == "rankings": pagina_rankings()
