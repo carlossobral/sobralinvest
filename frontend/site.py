@@ -131,6 +131,7 @@ components.html("""
         wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
         wrapper.style.paddingTop = '1rem';
         wrapper.style.paddingBottom = '1rem';
+        wrapper.style.overflow = 'visible'; // <-- LINHA MÁGICA PARA NÃO CORTAR O MENU
         wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
         
         wrapper.dataset.fixed = "true";
