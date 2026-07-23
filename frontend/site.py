@@ -17,6 +17,7 @@ hide_menu_style = """
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         .stDeployButton {display: none;}
+        /* ESCONDE A SIDEBAR NATIVA DO STREAMLIT */
         section[data-testid="stSidebar"] { display: none !important; }
         button[kind="header"] { display: none !important; }
         </style>
@@ -32,26 +33,43 @@ def init_supabase():
     if not url or not key:
         st.error("Credenciais do Supabase não encontradas.")
         st.stop()
-        return None
     return create_client(url, key)
 
 supabase = init_supabase()
 
 # ==========================================================
-# 2. CSS GLOBAL (TEMA ESCURO, CARDS E TOOLTIPS)
+# 2. CSS GLOBAL (TEMA ESCURO, CARDS E TOOLTIPS CORRIGIDOS)
 # ==========================================================
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-.header-container {
+/* HACK DEFINITIVO PARA O STICKY HEADER NO STREAMLIT */
+section[data-testid="stMain"] {
+    overflow: visible !important;
+}
+div[data-testid="stVerticalBlock"] {
+    overflow: visible !important;
+}
+div[data-testid="stMarkdownContainer"]:has(> .header-container) {
+    position: -webkit-sticky !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 999 !important;
+    background-color: var(--background-color, #0e1117) !important; /* USA A COR PADRÃO DO TEMA */
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+    margin-bottom: 1.5rem !important;
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
-    padding: 1rem 0 !important;
+}
+
+.header-container {
+    position: static !important;
+    border-bottom: none !important;
+    padding: 0 !important;
     margin: 0 !important;
     background-color: transparent !important;
-    width: 100%;
-    height: 100px;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -77,103 +95,16 @@ st.markdown("""
 .ranking-valor { font-size: 1.35rem; font-weight: 800; color: #38bdf8; margin: 6px 0; line-height: 1.1; }
 .ranking-footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; }
 
+/* CSS DO TOOLTIP CORRIGIDO */
 .tt { position: relative; display: inline-block; cursor: help; vertical-align: middle; }
 .tt-i { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: #475569; color: #f1f5f9; font-size: 10px; font-weight: 700; margin-left: 4px; }
 .tt-t { visibility: hidden; opacity: 0; width: 250px; background-color: #1e293b; border: 1px solid #475569; color: #e2e8f0; text-align: left; border-radius: 6px; padding: 10px; position: absolute; z-index: 9999; top: 20px; left: 50%; transform: translateX(-50%); transition: opacity 0.3s ease; font-size: 0.8rem; line-height: 1.4; box-shadow: 0 4px 6px rgba(0,0,0,0.3); pointer-events: none; }
 .tt:hover .tt-t { visibility: visible; opacity: 1; }
-
-/* CSS DO MENU HTML PURO */
-.nav-menu {
-    display: flex;
-    justify-content: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
-}
-.nav-link {
-    text-decoration: none;
-    font-size: 0.95rem;
-    font-weight: 600;
-    padding: 8px 16px;
-    border-radius: 8px;
-    background-color: transparent;
-    border: 1px solid #334155;
-    color: #94a3b8;
-    transition: all 0.2s;
-}
-.nav-link:hover {
-    border-color: #3b82f6;
-    color: #f1f5f9;
-}
-.nav-link.active {
-    background-color: #1e3a8a;
-    border-color: #3b82f6;
-    color: #ffffff;
-}
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 3. SCRIPT JAVASCRIPT DEFINITIVO (Trava o contêiner pai)
-# ==========================================================
-components.html("""
-<script>
-(function() {
-    const parentWindow = window.parent;
-    if (parentWindow.headerFixedInitialized) return;
-    parentWindow.headerFixedInitialized = true;
-
-    const parentDoc = parentWindow.document;
-
-    function fixAppHeader() {
-        const header = parentDoc.querySelector('.header-container');
-        if (!header) return;
-
-        const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
-        if (!wrapper || wrapper.dataset.fixed === "true") return;
-
-        const placeholder = parentDoc.createElement('div');
-        placeholder.id = 'app-placeholder';
-        placeholder.style.height = wrapper.offsetHeight + 'px';
-        placeholder.style.width = '100%';
-        placeholder.style.flexShrink = '0';
-        
-        wrapper.parentNode.insertBefore(placeholder, wrapper);
-
-        wrapper.style.position = 'fixed';
-        wrapper.style.top = '0';
-        wrapper.style.left = '0';
-        wrapper.style.width = '100%';
-        wrapper.style.zIndex = '9999';
-        wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
-        wrapper.style.backdropFilter = 'blur(12px)';
-        wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
-        wrapper.style.paddingTop = '1rem';
-        wrapper.style.paddingBottom = '1rem';
-        wrapper.style.overflow = 'visible'; 
-        wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-        
-        wrapper.dataset.fixed = "true";
-    }
-
-    setTimeout(fixAppHeader, 150);
-    
-    const observer = new parentWindow.MutationObserver(() => {
-        const header = parentDoc.querySelector('.header-container');
-        if (header) {
-            const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
-            if (wrapper && wrapper.dataset.fixed !== "true") {
-                fixAppHeader();
-            }
-        }
-    });
-    
-    observer.observe(parentDoc.body, { childList: true, subtree: true });
-})();
-</script>
-""", height=0, width=0)
-
-# ==========================================================
-# 4. TOOLTIPS E FUNÇÕES AUXILIARES
+# 3. TOOLTIPS E FUNÇÕES AUXILIARES
 # ==========================================================
 TOOLTIPS = {
     "P/L": "Preço sobre o Lucro. Demonstra quanto o mercado está disposto a pagar pelos lucros da empresa.",
@@ -242,7 +173,7 @@ def sem_color(label, val_str):
     return "#38bdf8"
 
 # ==========================================================
-# 5. FUNÇÕES DE DADOS
+# 4. FUNÇÕES DE DADOS
 # ==========================================================
 @st.cache_data(ttl=3600)
 def load_data():
@@ -298,9 +229,9 @@ def get_ativo_detalhado(ticker):
     return emp
 
 # ==========================================================
-# 6. HEADER UNIFICADO (MENU HTML + HEADER HTML JUNTOS)
+# 5. HEADER UNIFICADO
 # ==========================================================
-def render_header_and_menu(pagina, ticker_sel=None):
+def render_header(pagina, ticker_sel=None):
     titulo_pagina = ""
     subtitulo = ""
     
@@ -317,39 +248,27 @@ def render_header_and_menu(pagina, ticker_sel=None):
         titulo_pagina = "📊 Comparativo"
         subtitulo = "Análise Relativa"
 
-    # HTML do Menu em links puros
-    menu_html = '<div class="nav-menu">'
-    pages = [("home", "🏠 Home"), ("analise", "🔍 Análise"), ("rankings", "🏆 Rankings"), ("comparativo", "📊 Comparativo")]
-    for key, label in pages:
-        active_class = "active" if pagina == key else ""
-        menu_html += f'<a href="?page={key}" class="nav-link {active_class}">{label}</a>'
-    menu_html += '</div>'
-    
-    # HTML do Header
-    header_html = f"""
+    st.markdown(f"""
     <div class="header-container">
-        {menu_html}
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div class="header-brand">
-                <div>
-                    <div class="header-brand-name">SOBRAL Invest</div>
-                    <div class="header-brand-tag">Análise Fundamentalista & Valuation</div>
-                </div>
-            </div>
-            <div class="header-context">
-                <div class="header-page-title">{titulo_pagina}</div>
-                <div class="header-subtitle">{subtitulo}</div>
+        <div class="header-brand">
+            <div>
+                <div class="header-brand-name">SOBRAL Invest</div>
+                <div class="header-brand-tag">Análise Fundamentalista & Valuation</div>
             </div>
         </div>
+        <div class="header-context">
+            <div class="header-page-title">{titulo_pagina}</div>
+            <div class="header-subtitle">{subtitulo}</div>
+        </div>
     </div>
-    """
-    
-    st.markdown(header_html, unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 # ==========================================================
-# 7. PÁGINAS
+# 6. PÁGINAS
 # ==========================================================
 def pagina_home():
+    render_header("home")
+    
     st.markdown("### 📈 Ibovespa")
     components.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""", height=420)
     
@@ -412,25 +331,17 @@ def pagina_home():
 def pagina_analise():
     df = load_data()
     if df.empty:
+        render_header("analise")
         st.warning("Dados não disponíveis.")
         return
         
     df['Disp'] = (df['ticker'].astype(str).fillna('') + ' - ' + df['nome'].astype(str).fillna('')).astype(str)
     opts = sorted(df['Disp'].tolist())
     
-    current_sel = st.session_state.get("sel_v2")
-    current_ticker = current_sel.split(' - ')[0] if current_sel else None
-    
-    idx = 0
-    if "ticker_destino" in st.session_state and st.session_state["ticker_destino"]:
-        for i, o in enumerate(opts):
-            if o.startswith(st.session_state["ticker_destino"] + ' -'):
-                idx = i
-                break
-        st.session_state.pop("ticker_destino", None)
-
-    sel = st.selectbox("Selecione o ativo", options=opts, index=idx, key="sel_v2")
+    sel = st.selectbox("Selecione o ativo", options=opts)
     ticker = sel.split(' - ')[0]
+    
+    render_header("analise", ticker)
     
     st.markdown('<div class="c">', unsafe_allow_html=True)
     
@@ -546,6 +457,7 @@ def pagina_analise():
     st.markdown('</div>', unsafe_allow_html=True)
 
 def pagina_rankings():
+    render_header("rankings")
     df = load_data()
     if df.empty: return
 
@@ -653,6 +565,7 @@ def pagina_rankings():
         render_ranking(df_filt, 'score', 'Maiores Scores 3.0', lambda x: f"{x:.0f}", cor_valor="#10b981")
 
 def pagina_comparativo():
+    render_header("comparativo")
     df = load_data()
     if df.empty: return
 
@@ -673,15 +586,9 @@ def pagina_comparativo():
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================================
-# 8. ROTEADOR PRINCIPAL
+# 7. ROTEADOR PRINCIPAL
 # ==========================================================
 def main():
-    # 1. LÊ A NAVEGAÇÃO PELO LINK HTML (?page=...)
-    if "page" in st.query_params:
-        st.session_state["pagina_atual"] = st.query_params["page"]
-        del st.query_params["page"]
-        st.rerun()
-
     if "pagina_atual" not in st.session_state:
         st.session_state["pagina_atual"] = "home"
     if "ticker_destino" not in st.session_state:
@@ -689,25 +596,28 @@ def main():
 
     if st.session_state.get("ticker_destino"):
         st.session_state["pagina_atual"] = "analise"
-        ticker_destino_temp = st.session_state["ticker_destino"]
-    else:
-        ticker_destino_temp = None
-
-    # --- BLOCO ÚNICO: MENU HTML + HEADER HTML (O JS vai fixar este contêiner inteiro) ---
-    with st.container():
-        pagina = st.session_state["pagina_atual"]
-        
-        ticker_dest = ticker_destino_temp
-        if not ticker_dest and pagina == "analise":
-            sel = st.session_state.get("sel_v2", "")
-            ticker_dest = sel.split(' - ')[0] if sel else None
-            
-        render_header_and_menu(pagina, ticker_dest)
-        
-    if ticker_destino_temp:
         st.session_state["ticker_destino"] = None
 
-    # CONTEÚDO DA PÁGINA
+    # --- MENU HORIZONTAL CENTRALIZADO ---
+    # Colunas vazias nas pontas para forçar o centro
+    cols_nav = st.columns([2, 1, 1, 1, 1, 2])
+    pages = [
+        ("home", "🏠 Home"), 
+        ("analise", "🔍 Análise"), 
+        ("rankings", "🏆 Rankings"), 
+        ("comparativo", "📊 Comparativo")
+    ]
+    for i, (key, label) in enumerate(pages):
+        is_active = st.session_state["pagina_atual"] == key
+        btn_type = "primary" if is_active else "secondary"
+        # Os botões vão para as colunas 1, 2, 3 e 4 (índices 1 a 4)
+        if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
+            st.session_state["pagina_atual"] = key
+            st.rerun()
+            
+    # Espaço entre o menu e o header
+    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+
     pagina = st.session_state["pagina_atual"]
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
