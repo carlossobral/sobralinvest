@@ -10,16 +10,13 @@ import plotly.graph_objects as go
 # ==========================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CONEXÃO SUPABASE
 # ==========================================================
-st.set_page_config(page_title="Sobral Invest", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Sobral Invest", page_icon="📊", layout="wide")
 
 hide_menu_style = """
         <style>
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         .stDeployButton {display: none;}
-        /* ESCONDE A SIDEBAR NATIVA DO STREAMLIT */
-        section[data-testid="stSidebar"] { display: none !important; }
-        button[kind="header"] { display: none !important; }
         </style>
         """
 st.markdown(hide_menu_style, unsafe_allow_html=True)
@@ -44,41 +41,13 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
-
-/* HACK DEFINITIVO PARA O STICKY HEADER NO STREAMLIT */
-section[data-testid="stMain"] {
-    overflow: visible !important;
-}
-div[data-testid="stVerticalBlock"] {
-    overflow: visible !important;
-}
-div[data-testid="stMarkdownContainer"]:has(> .header-container) {
-    position: -webkit-sticky !important;
-    position: sticky !important;
-    top: 0 !important;
-    z-index: 999 !important;
-    background-color: var(--background-color, #0e1117) !important; /* USA A COR PADRÃO DO TEMA */
-    padding-top: 1rem !important;
-    padding-bottom: 1rem !important;
-    margin-bottom: 1.5rem !important;
-    border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
-}
-
-.header-container {
-    position: static !important;
-    border-bottom: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    background-color: transparent !important;
-}
-
+.header-container { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 16px; margin-bottom: 24px; margin-top: -10px; }
 .header-brand { display: flex; align-items: center; gap: 12px; }
 .header-brand-name { font-size: 1.4rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; line-height: 1.2; }
 .header-brand-tag { font-size: 0.75rem; color: #64748b; font-weight: 500; }
 .header-context { text-align: right; }
 .header-page-title { font-size: 1.1rem; font-weight: 600; color: #38bdf8; margin-bottom: 2px; }
 .header-subtitle { font-size: 0.8rem; color: #94a3b8; }
-
 .st { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; text-transform: uppercase; letter-spacing: 0.1em; margin: 40px 0 22px 0; padding-bottom: 10px; border-bottom: 2px solid #334155; display: flex; align-items: center; gap: 10px; }
 .mc { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 18px 16px; transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 100%; display: flex; flex-direction: column; justify-content: space-between; min-height: 95px; }
 .mc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.25); border-color: #3b82f6; }
@@ -88,12 +57,15 @@ div[data-testid="stMarkdownContainer"]:has(> .header-container) {
 .sn { font-size: 3.5rem; font-weight: 800; line-height: 1; margin-bottom: 8px; }
 .sl { font-size: 1.1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
 .sd { font-size: 0.8rem; color: #94a3b8; margin-top: 6px; }
-
 .ranking-card { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 4px 10px 14px 10px; margin-bottom: 0.75rem; transition: all 0.3s ease; text-align: center; height: 100%; }
 .ranking-card:hover { transform: translateY(-3px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); border-color: #3b82f6; }
 .ranking-nome { font-size: 0.72rem; color: #94a3b8; margin: 0 0 8px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
 .ranking-valor { font-size: 1.35rem; font-weight: 800; color: #38bdf8; margin: 6px 0; line-height: 1.1; }
 .ranking-footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; }
+div[data-testid="stSidebar"] div.stButton > button { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%) !important; border: 1px solid #334155 !important; border-radius: 10px !important; padding: 12px 16px !important; margin: 6px 0 !important; color: #e2e8f0 !important; font-weight: 600 !important; width: 100% !important; text-align: left !important; }
+div[data-testid="stSidebar"] div.stButton > button:hover { border-color: #60a5fa !important; transform: translateX(4px) !important; }
+div[data-testid="stSidebar"] div.stButton > button[kind="primary"] { background: linear-gradient(145deg, #1e3a8a 0%, #1e40af 100%) !important; border-color: #3b82f6 !important; color: #ffffff !important; }
+div[data-testid="stButton"] > button[kind="secondary"] { background: transparent !important; border: none !important; padding: 0 !important; color: #38bdf8 !important; text-decoration: underline !important; font-size: 1.1rem !important; font-weight: 800 !important; cursor: pointer !important; width: auto !important; min-width: 0 !important; box-shadow: none !important; margin: 0 auto 4px auto !important; display: block !important; }
 
 /* CSS DO TOOLTIP CORRIGIDO */
 .tt { position: relative; display: inline-block; cursor: help; vertical-align: middle; }
@@ -157,20 +129,24 @@ def tooltip(t):
     return f'<span class="tt"><span class="tt-i">?</span><span class="tt-t">{d}</span></span>' if d else ""
 
 def sem_color(label, val_str):
+    """Retorna a cor com base na lógica matemática do indicador."""
     try:
+        # Limpa a string para extrair o número
         val = float(str(val_str).replace('R$','').replace('x','').replace('%','').replace('+','').replace(',','').strip())
     except:
-        return "#94a3b8"
+        return "#94a3b8" # Cinza se não conseguir converter
     
     l = label.lower()
     
+    # Indicadores onde MENOR é melhor (Valuation e Endividamento)
     if any(k in l for k in ["p/l", "p/vp", "ev/ebit", "ev/ebitda", "dív. líq", "passivo/ativos", "p/receita", "p/ativo", "p/cap", "p/ebit", "p/ativo circ"]):
         return "#10b981" if val < 10 else ("#f59e0b" if val < 20 else "#ef4444")
         
+    # Indicadores onde MAIOR é melhor (Rentabilidade, Crescimento, Liquidez)
     if any(k in l for k in ["roe", "roic", "roa", "margem", "dy", "cagr", "giro", "patrimonio/ativos", "liq. corrente", "cobertura"]):
         return "#10b981" if val > 15 else ("#f59e0b" if val > 5 else "#ef4444")
         
-    return "#38bdf8"
+    return "#38bdf8" # Azul padrão para LPA, VPA, etc (não há regra de bom/ruim direta)
 
 # ==========================================================
 # 4. FUNÇÕES DE DADOS
@@ -193,6 +169,7 @@ def load_data():
     df = df_score.merge(df_emp, on="ticker", how="left")
     df = df.merge(df_ind, on="ticker", how="left")
     
+    # Buscar cotação mais recente
     resp_cot_date = supabase.table("cotacoes").select("data").order("data", desc=True).limit(1).execute()
     if resp_cot_date.data:
         latest_date = resp_cot_date.data[0]['data']
@@ -208,6 +185,26 @@ def load_data():
     return df
 
 @st.cache_data(ttl=3600)
+def get_altas_baixas():
+    resp = supabase.table("cotacoes").select("ticker, data, fechamento").order("data", desc=True).limit(2000).execute()
+    df = pd.DataFrame(resp.data)
+    if df.empty: return pd.DataFrame(), pd.DataFrame()
+    
+    df['fechamento'] = pd.to_numeric(df['fechamento'], errors='coerce')
+    df['data'] = pd.to_datetime(df['data'])
+    df = df.dropna(subset=['data'])
+    
+    datas = sorted(df['data'].unique(), reverse=True)
+    if len(datas) < 2: return pd.DataFrame(), pd.DataFrame()
+    
+    df_recente = df[df['data'] == datas[0]][['ticker', 'fechamento']].rename(columns={'fechamento': 'close_hoje'})
+    df_anterior = df[df['data'] == datas[1]][['ticker', 'fechamento']].rename(columns={'fechamento': 'close_ontem'})
+    
+    df_merge = df_recente.merge(df_anterior, on='ticker', how='inner')
+    df_merge['variacao'] = ((df_merge['close_hoje'] - df_merge['close_ontem']) / df_merge['close_ontem']) * 100
+    
+    return df_merge.nlargest(5, 'variacao'), df_merge.nsmallest(5, 'variacao')
+
 def get_ativo_detalhado(ticker):
     emp = supabase.table("empresas").select("*").eq("ticker", ticker).execute().data
     if not emp: return None
@@ -272,61 +269,30 @@ def pagina_home():
     st.markdown("### 📈 Ibovespa")
     components.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""", height=420)
     
-    st.markdown("### 🚀 Maiores Altas e Baixas (B3)")
-    components.html("""
-    <div class="tradingview-widget-container">
-      <div class="tradingview-widget-container__widget"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-hotlists.js" async>
-      {
-        "colorTheme": "dark",
-        "dateRange": "1D",
-        "exchange": "BMFBOVESPA",
-        "showChart": true,
-        "locale": "br",
-        "largeChartUrl": "",
-        "isTransparent": false,
-        "showSymbolLogo": true,
-        "showFloatingTooltip": true,
-        "width": "100%",
-        "height": "550",
-        "plotLineColorGrowing": "rgba(41, 98, 255, 1)",
-        "plotLineColorFalling": "rgba(41, 98, 255, 1)",
-        "plotLineColorGrowingBottom": "rgba(41, 98, 255, 0)",
-        "plotLineColorFallingBottom": "rgba(41, 98, 255, 0)",
-        "gridLineColor": "rgba(42, 46, 57, 0)",
-        "scaleFontColor": "rgba(120, 123, 134, 1)",
-        "belowLineFillColorGrowing": "rgba(41, 98, 255, 0.12)",
-        "belowLineFillColorFalling": "rgba(41, 98, 255, 0.12)",
-        "belowLineFillColorGrowingBottom": "rgba(41, 98, 255, 0)",
-        "belowLineFillColorFallingBottom": "rgba(41, 98, 255, 0)",
-        "symbolActiveColor": "rgba(41, 98, 255, 0.12)",
-        "tabs": [
-          {
-            "title": "Mais Negociadas",
-            "symbols": [
-              { "s": "BMFBOVESPA:PETR4", "d": "Petrobras" },
-              { "s": "BMFBOVESPA:VALE3", "d": "Vale" },
-              { "s": "BMFBOVESPA:ITUB4", "d": "Itau Unibanco" },
-              { "s": "BMFBOVESPA:BBDC4", "d": "Bradesco" },
-              { "s": "BMFBOVESPA:ABEV3", "d": "Ambev" },
-              { "s": "BMFBOVESPA:WEGE3", "d": "Weg" },
-              { "s": "BMFBOVESPA:BBAS3", "d": "Banco do Brasil" }
-            ],
-            "originalTitle": "Equities"
-          },
-          {
-            "title": "Maiores Altas",
-            "symbols": [{ "s": "BMFBOVESPA:IBOV", "d": "Ibovespa" }]
-          },
-          {
-            "title": "Maiores Baixas",
-            "symbols": [{ "s": "BMFBOVESPA:IBOV", "d": "Ibovespa" }]
-          }
-        ]
-      }
-      </script>
-    </div>
-    """, height=560)
+    altas, baixas = get_altas_baixas()
+    col_alt, col_baix = st.columns(2)
+    
+    with col_alt:
+        st.markdown('<div class="st">🚀 Maiores Altas (Hoje)</div>', unsafe_allow_html=True)
+        for _, row in altas.iterrows():
+            st.markdown(f"""
+            <div class="mc" style="border-left: 4px solid #10b981; margin-bottom: 10px;">
+                <div class="ml">{row['ticker']}</div>
+                <div class="mv" style="color:#10b981;">+{row['variacao']:.2f}%</div>
+                <div style="font-size:0.8rem; color:#94a3b8;">R$ {row['close_hoje']:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+    with col_baix:
+        st.markdown('<div class="st">🩸 Maiores Baixas (Hoje)</div>', unsafe_allow_html=True)
+        for _, row in baixas.iterrows():
+            st.markdown(f"""
+            <div class="mc" style="border-left: 4px solid #ef4444; margin-bottom: 10px;">
+                <div class="ml">{row['ticker']}</div>
+                <div class="mv" style="color:#ef4444;">{row['variacao']:.2f}%</div>
+                <div style="font-size:0.8rem; color:#94a3b8;">R$ {row['close_hoje']:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 def pagina_analise():
     df = load_data()
@@ -348,6 +314,7 @@ def pagina_analise():
     ativo = get_ativo_detalhado(ticker)
     if not ativo: return
 
+    # Cabeçalho Setor > SubSetor > Segmento
     st.markdown(f"""
     <div style="display: flex; gap: 20px; margin: 8px 0 16px 0; align-items: center; flex-wrap: wrap;">
         <div><span style="font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase;">Setor</span><span style="font-size: 0.85rem; font-weight: 500; color: #f1f5f9; margin-left: 8px;">{ativo.get('setor', 'N/A')}</span></div>
@@ -368,7 +335,7 @@ def pagina_analise():
                 i = r * cols + c
                 if i < len(data):
                     lbl, val = data[i]
-                    cl = sem_color(lbl, val)
+                    cl = sem_color(lbl, val) # Aplica a cor dinâmica
                     cs[c].markdown(f"""<div class="mc" style="border-left: 4px solid {cl};"><div class="ml">{lbl} {tooltip(lbl)}</div><div class="mv" style="color: {cl};">{val}</div></div>""", unsafe_allow_html=True)
 
     sec("Valuation", [
@@ -542,7 +509,7 @@ def pagina_rankings():
         render_ranking(df_filt, 'roe', 'Maiores ROE', lambda x: f"{x*100:.2f}%", cor_valor="#10b981")
     elif ranking_sel == "Maior Upside AGF":
         df_filt['upside_agf'] = ((df_filt['agf'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
-        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bfa")
+        render_ranking(df_filt, 'upside_agf', 'Maior Upside AGF', lambda x: f"{x:+.1f}%", cor_valor="#a78bva")
     elif ranking_sel == "Mais Baratas - Graham":
         df_filt['upside_graham'] = ((df_filt['graham'] - df_filt['preco_atual']) / df_filt['preco_atual']) * 100
         render_ranking(df_filt, 'upside_graham', 'Mais Baratas - Graham', lambda x: f"{x:+.1f}%", cor_valor="#34d399")
@@ -594,31 +561,28 @@ def main():
     if "ticker_destino" not in st.session_state:
         st.session_state["ticker_destino"] = None
 
-    if st.session_state.get("ticker_destino"):
-        st.session_state["pagina_atual"] = "analise"
-        st.session_state["ticker_destino"] = None
-
-    # --- MENU HORIZONTAL CENTRALIZADO ---
-    # Colunas vazias nas pontas para forçar o centro
-    cols_nav = st.columns([2, 1, 1, 1, 1, 2])
-    pages = [
-        ("home", "🏠 Home"), 
-        ("analise", "🔍 Análise"), 
-        ("rankings", "🏆 Rankings"), 
-        ("comparativo", "📊 Comparativo")
-    ]
-    for i, (key, label) in enumerate(pages):
-        is_active = st.session_state["pagina_atual"] == key
-        btn_type = "primary" if is_active else "secondary"
-        # Os botões vão para as colunas 1, 2, 3 e 4 (índices 1 a 4)
-        if cols_nav[i+1].button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
-            st.session_state["pagina_atual"] = key
-            st.rerun()
-            
-    # Espaço entre o menu e o header
-    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    with st.sidebar:
+        st.markdown("<div style='font-size: 1.1rem; font-weight: 700; color: #f1f5f9; margin-bottom: 12px;'>Navegação</div>", unsafe_allow_html=True)
+        pages = [
+            ("home", "🏠 Home"), 
+            ("analise", "🔍 Análise"), 
+            ("rankings", "🏆 Rankings"), 
+            ("comparativo", "📊 Comparativo")
+        ]
+        for key, label in pages:
+            is_active = st.session_state["pagina_atual"] == key
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
+                st.session_state["pagina_atual"] = key
+                st.rerun()
 
     pagina = st.session_state["pagina_atual"]
+    
+    # Se veio de um clique no ranking, força ir para análise
+    if st.session_state.get("ticker_destino"):
+        pagina = "analise"
+        st.session_state["ticker_destino"] = None # Limpa para não travar nela
+
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
     elif pagina == "rankings": pagina_rankings()
