@@ -56,28 +56,12 @@ supabase = init_supabase()
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-.c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
-
-.header-container {
-    display: flex; 
-    justify-content: space-between; 
-    align-items: center; /* ALINHA VERTICALMENTE O NOME E O TÍTULO */
-    border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
-    padding: 1rem 0 !important;
-    margin: 0 !important;
-    background-color: transparent !important;
-    width: 100%;
-}
-
-.header-brand { display: flex; align-items: center; gap: 12px; }
-.header-brand-name { font-size: 1.4rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; line-height: 1.2; }
-.header-brand-tag { font-size: 0.75rem; color: #64748b; font-weight: 500; }
-.header-context { text-align: right; }
-.header-page-title { font-size: 1.1rem; font-weight: 600; color: #38bdf8; margin-bottom: 2px; }
-.header-subtitle { font-size: 0.8rem; color: #94a3b8; }
+.c * { font-family: 'Inter', sans-serif; } 
+.c { padding: 0 8px 40px 8px; }
 
 .st { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; text-transform: uppercase; letter-spacing: 0.1em; margin: 40px 0 22px 0; padding-bottom: 10px; border-bottom: 2px solid #334155; display: flex; align-items: center; gap: 10px; }
-.mc { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 18px 16px; transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 100%; display: flex; flex-direction: column; justify-content: space-between; min-height: 95px; }
+
+/* CARD PRINCIPAL: Overflow visible é CRUCIAL para o tooltip não ser cortado */
 .mc { 
     background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); 
     border: 1px solid #334155; 
@@ -90,45 +74,73 @@ st.markdown("""
     flex-direction: column; 
     justify-content: space-between; 
     min-height: 95px; 
-    position: relative;       /* ADICIONADO */
-    overflow: visible !important; /* ADICIONADO */
-    z-index: 1;               /* ADICIONADO */
-}.ml { position: relative; font-size: 0.72rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; line-height: 1.3; }
+    position: relative;
+    overflow: visible !important; /* PERMITE O TOOLTIP SAIR DO CARD */
+    z-index: 1;
+}
+.mc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.25); border-color: #3b82f6; z-index: 10; }
+
+.ml { font-size: 0.72rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; line-height: 1.3; display: flex; align-items: center; }
 .mv { font-size: 1.45rem; font-weight: 700; color: #f1f5f9; line-height: 1.1; letter-spacing: -0.02em; }
+
+/* SCORE CARD */
 .sc { border-radius: 16px; padding: 24px; text-align: center; box-shadow: 0 10px 15px rgba(0,0,0,0.2); }
 .sn { font-size: 3.5rem; font-weight: 800; line-height: 1; margin-bottom: 8px; }
 .sl { font-size: 1.1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
 .sd { font-size: 0.8rem; color: #94a3b8; margin-top: 6px; }
 
-.ranking-card { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 4px 10px 14px 10px; margin-bottom: 0.75rem; transition: all 0.3s ease; text-align: center; height: 100%; }
-.ranking-card:hover { transform: translateY(-3px); box-shadow: 0 8px 16px rgba(0,0,0,0.3); border-color: #3b82f6; }
-.ranking-nome { font-size: 0.72rem; color: #94a3b8; margin: 0 0 8px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
-.ranking-valor { font-size: 1.35rem; font-weight: 800; color: #38bdf8; margin: 6px 0; line-height: 1.1; }
-.ranking-footer { display: flex; justify-content: space-between; align-items: center; font-size: 0.68rem; margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; }
+/* PREÇO JUSTO CARD */
+.pc { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 16px; text-align: center; transition: all 0.3s ease; }
+.pc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.2); }
+.pt { font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.pv { font-size: 1.2rem; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; }
+.pu { font-size: 0.9rem; font-weight: 600; padding: 3px 10px; border-radius: 12px; display: inline-block; }
 
-.tt { position: relative; display: inline-block; cursor: help; vertical-align: middle; }
-.tt-i { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: #475569; color: #f1f5f9; font-size: 10px; font-weight: 700; margin-left: 4px; }
+/* TOOLTIP CORRIGIDO */
+.tt { position: relative; display: inline-flex; align-items: center; cursor: help; z-index: 20; }
+.tt-i { 
+    display: inline-flex; align-items: center; justify-content: center; 
+    width: 16px; height: 16px; border-radius: 50%; 
+    background: #475569; color: #f1f5f9; font-size: 11px; font-weight: 700; 
+    margin-left: 6px; flex-shrink: 0;
+}
+.tt-i:hover { background: #3b82f6; }
+
 .tt-t { 
     visibility: hidden; 
-    opacity: 0; 
-    width: 250px; 
-    background-color: #1e293b; 
+    width: 260px; 
+    background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); 
     border: 1px solid #475569; 
     color: #e2e8f0; 
     text-align: left; 
-    border-radius: 6px; 
-    padding: 10px; 
+    border-radius: 8px; 
+    padding: 10px 12px; 
     position: absolute; 
-    z-index: 9999 !important;  /* FORCE ESTE VALOR ALTO */
-    top: 20px; 
+    z-index: 9999 !important; /* FORÇA FICAR POR CIMA DE TUDO */
+    bottom: calc(100% + 12px); /* ABRE PARA CIMA DO ÍCONE */
     left: 50%; 
     transform: translateX(-50%); 
-    transition: opacity 0.3s ease; 
-    font-size: 0.8rem; 
+    opacity: 0; 
+    transition: opacity 0.2s ease, visibility 0.2s ease; 
+    font-size: 0.78rem; 
     line-height: 1.4; 
-    box-shadow: 0 4px 6px rgba(0,0,0,0.3); 
-    pointer-events: none; 
-}.tt:hover .tt-t { visibility: visible; opacity: 1; }
+    box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
+    pointer-events: none;
+}
+
+/* Seta do tooltip apontando para baixo */
+.tt-t::after { 
+    content: ""; 
+    position: absolute; 
+    top: 100%; 
+    left: 50%; 
+    transform: translateX(-50%); 
+    border-width: 6px; 
+    border-style: solid; 
+    border-color: #475569 transparent transparent transparent; 
+}
+
+.tt:hover .tt-t { visibility: visible; opacity: 1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -187,18 +199,49 @@ def tooltip(t):
 
 def sem_color(label, val_str):
     try:
-        val = float(str(val_str).replace('R$','').replace('x','').replace('%','').replace('+','').replace(',','').strip())
+        # Limpeza robusta para garantir conversão em float (lida com negativos, %, R$, x)
+        clean_val = str(val_str).replace('R$', '').replace('x', '').replace('%', '').replace('+', '').strip()
+        val = float(clean_val)
     except:
-        return "#94a3b8"
-    
+        return "#94a3b8" # Cinza para N/A ou erro de conversão
+
     l = label.lower()
-    
-    if any(k in l for k in ["p/l", "p/vp", "ev/ebit", "ev/ebitda", "dív. líq", "passivo/ativos", "p/receita", "p/ativo", "p/cap", "p/ebit", "p/ativo circ"]):
-        return "#10b981" if val < 10 else ("#f59e0b" if val < 20 else "#ef4444")
-        
-    if any(k in l for k in ["roe", "roic", "roa", "margem", "dy", "cagr", "giro", "patrimonio/ativos", "liq. corrente", "cobertura"]):
-        return "#10b981" if val > 15 else ("#f59e0b" if val > 5 else "#ef4444")
-        
+
+    # 1. Múltiplos de Valuation (MENOR é MELHOR)
+    if any(k in l for k in ["p/l", "p/vp", "p/receita", "p/ativo", "p/cap", "p/ebit", "p/ativo circ", "ev/ebit", "ev/ebitda", "passivo/ativos"]):
+        if val <= 0: return "#94a3b8" # Múltiplos negativos geralmente são distorções contábeis
+        if val <= 10: return "#10b981" # Verde (Barato)
+        if val <= 20: return "#f59e0b" # Amarelo (Razoável)
+        return "#ef4444" # Vermelho (Caro)
+
+    # 2. Endividamento (Dívida Líquida)
+    if "dív. líq" in l or "div_liq" in l:
+        if val < 0: return "#10b981" # Caixa Líquido é excelente (Verde)
+        if val <= 1.5: return "#10b981" # Verde (Saudável)
+        if val <= 3.0: return "#f59e0b" # Amarelo (Atenção)
+        return "#ef4444" # Vermelho (Alto risco)
+
+    # 3. Rentabilidade, Crescimento e Upside (MAIOR é MELHOR)
+    if any(k in l for k in ["roe", "roic", "roa", "margem", "dy", "cagr", "upside", "giro"]):
+        if "upside" in l:
+            return "#10b981" if val > 0 else "#ef4444" # Upside: >0 verde, <0 vermelho
+        if val >= 15: return "#10b981" # Verde (Excelente)
+        if val >= 5: return "#f59e0b"  # Amarelo (Razoável)
+        return "#ef4444" # Vermelho (Fraco/Negativo)
+
+    # 4. Liquidez Corrente
+    if "liq. corrente" in l:
+        if val >= 1.5: return "#10b981"
+        if val >= 1.0: return "#f59e0b"
+        return "#ef4444"
+
+    # 5. Score
+    if "score" in l:
+        if val >= 80: return "#10b981"
+        if val >= 60: return "#f59e0b"
+        return "#ef4444"
+
+    # Default para neutros
     return "#38bdf8"
 
 # ==========================================================
