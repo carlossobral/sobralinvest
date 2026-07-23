@@ -20,6 +20,14 @@ hide_menu_style = """
         /* ESCONDE A SIDEBAR NATIVA DO STREAMLIT */
         section[data-testid="stSidebar"] { display: none !important; }
         button[kind="header"] { display: none !important; }
+        
+        /* REMOVE O PADDING GIGANTE DO TOPO DO STREAMLIT */
+        section[data-testid="stMain"] {
+            padding-top: 1rem !important; 
+        }
+        div[data-testid="stAppViewContainer"] {
+            padding-top: 0 !important;
+        }
         </style>
         """
 st.markdown(hide_menu_style, unsafe_allow_html=True)
@@ -47,10 +55,13 @@ st.markdown("""
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
 .header-container {
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; /* ALINHA VERTICALMENTE O NOME E O TÍTULO */
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
     padding: 1rem 0 !important;
     margin: 0 !important;
-    background-color: var(--background-color, #0e1117) !important;
+    background-color: transparent !important;
     width: 100%;
 }
 
@@ -600,7 +611,7 @@ def main():
             st.session_state["pagina_atual"] = key
             st.rerun()
             
-    st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-top: 0px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
     # --- HEADER ---
     pagina = st.session_state["pagina_atual"]
