@@ -41,7 +41,19 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
-.header-container { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 16px; margin-bottom: 24px; margin-top: -10px; }
+.header-container { 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    border-bottom: 1px solid #334155; 
+    padding: 16px 0; 
+    margin-bottom: 24px; 
+    margin-top: -10px; 
+    position: sticky; /* TRAVA O HEADER NO TOPO */
+    top: 0; 
+    z-index: 1000; /* GARANTE QUE FIQUE ACIMA DOS OUTROS ELEMENTOS */
+    background-color: #0f172a; /* COR DE FUNDO PARA TAPAR O CONTEÚDO QUE ROLA EMBAIXO */
+}
 .header-brand { display: flex; align-items: center; gap: 12px; }
 .header-brand-name { font-size: 1.4rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; line-height: 1.2; }
 .header-brand-tag { font-size: 0.75rem; color: #64748b; font-weight: 500; }
@@ -185,25 +197,6 @@ def load_data():
     return df
 
 @st.cache_data(ttl=3600)
-def get_altas_baixas():
-    resp = supabase.table("cotacoes").select("ticker, data, fechamento").order("data", desc=True).limit(2000).execute()
-    df = pd.DataFrame(resp.data)
-    if df.empty: return pd.DataFrame(), pd.DataFrame()
-    
-    df['fechamento'] = pd.to_numeric(df['fechamento'], errors='coerce')
-    df['data'] = pd.to_datetime(df['data'])
-    df = df.dropna(subset=['data'])
-    
-    datas = sorted(df['data'].unique(), reverse=True)
-    if len(datas) < 2: return pd.DataFrame(), pd.DataFrame()
-    
-    df_recente = df[df['data'] == datas[0]][['ticker', 'fechamento']].rename(columns={'fechamento': 'close_hoje'})
-    df_anterior = df[df['data'] == datas[1]][['ticker', 'fechamento']].rename(columns={'fechamento': 'close_ontem'})
-    
-    df_merge = df_recente.merge(df_anterior, on='ticker', how='inner')
-    df_merge['variacao'] = ((df_merge['close_hoje'] - df_merge['close_ontem']) / df_merge['close_ontem']) * 100
-    
-    return df_merge.nlargest(5, 'variacao'), df_merge.nsmallest(5, 'variacao')
 
 def get_ativo_detalhado(ticker):
     emp = supabase.table("empresas").select("*").eq("ticker", ticker).execute().data
@@ -266,33 +259,54 @@ def render_header(pagina, ticker_sel=None):
 def pagina_home():
     render_header("home")
     
+    # 1. Widget do Ibovespa
     st.markdown("### 📈 Ibovespa")
     components.html("""<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div><script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js" async>{"symbols": [["BMFBOVESPA:IBOV|1D"]], "chartOnly": false, "width": "100%", "height": "400", "locale": "br", "colorTheme": "dark", "autosize": false, "showVolume": true}</script></div>""", height=420)
     
-    altas, baixas = get_altas_baixas()
-    col_alt, col_baix = st.columns(2)
-    
-    with col_alt:
-        st.markdown('<div class="st">🚀 Maiores Altas (Hoje)</div>', unsafe_allow_html=True)
-        for _, row in altas.iterrows():
-            st.markdown(f"""
-            <div class="mc" style="border-left: 4px solid #10b981; margin-bottom: 10px;">
-                <div class="ml">{row['ticker']}</div>
-                <div class="mv" style="color:#10b981;">+{row['variacao']:.2f}%</div>
-                <div style="font-size:0.8rem; color:#94a3b8;">R$ {row['close_hoje']:.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-    with col_baix:
-        st.markdown('<div class="st">🩸 Maiores Baixas (Hoje)</div>', unsafe_allow_html=True)
-        for _, row in baixas.iterrows():
-            st.markdown(f"""
-            <div class="mc" style="border-left: 4px solid #ef4444; margin-bottom: 10px;">
-                <div class="ml">{row['ticker']}</div>
-                <div class="mv" style="color:#ef4444;">{row['variacao']:.2f}%</div>
-                <div style="font-size:0.8rem; color:#94a3b8;">R$ {row['close_hoje']:.2f}</div>
-            </div>
-            """, unsafe_allow_html=True)
+    # 2. Widget de Maiores Altas e Baixas (Market Movers)
+    st.markdown("### 🚀 Maiores Altas e Baixas (B3)")
+    components.html("""
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-market-movers.js" async>
+      {
+      "colorTheme": "dark",
+      "dateRange": "1D",
+      "showChart": true,
+      "locale": "br",
+      "width": "100%",
+      "height": "500",
+      "largeChartUrl": "",
+      "isTransparent": false,
+      "showSymbolLogo": true,
+      "showFloatingTooltip": false,
+      "plotLineColorGrowing": "rgba(41, 98, 255, 1)",
+      "plotLineColorFalling": "rgba(41, 98, 255, 1)",
+      "gridLineColor": "rgba(240, 243, 250, 0)",
+      "scaleFontColor": "rgba(219, 234, 254, 1)",
+      "belowLineFillColorGrowing": "rgba(41, 98, 255, 0.12)",
+      "belowLineFillColorFalling": "rgba(41, 98, 255, 0.12)",
+      "symbolActiveColor": "rgba(41, 98, 255, 0.12)",
+      "tabs": [
+        {
+          "title": "Maiores Altas",
+          "symbols": {
+            "proName": "BMFBOVESPA"
+          },
+          "list": "topGainers"
+        },
+        {
+          "title": "Maiores Baixas",
+          "symbols": {
+            "proName": "BMFBOVESPA"
+          },
+          "list": "topLosers"
+        }
+      ]
+    }
+      </script>
+    </div>
+    """, height=560)
 
 def pagina_analise():
     df = load_data()
