@@ -21,12 +21,16 @@ hide_menu_style = """
         section[data-testid="stSidebar"] { display: none !important; }
         button[kind="header"] { display: none !important; }
         
-        /* REMOVE O PADDING GIGANTE DO TOPO DO STREAMLIT */
+        /* ELIMINA O ESPAÇAMENTO GIGANTE DO TOPO DO STREAMLIT */
         section[data-testid="stMain"] {
-            padding-top: 1rem !important; 
+            padding-top: 0.5rem !important; 
         }
-        div[data-testid="stAppViewContainer"] {
+        section[data-testid="stAppViewContainer"] {
             padding-top: 0 !important;
+        }
+        /* Remove a margem do primeiro bloco vertical dentro do Main */
+        section[data-testid="stMain"] > div[data-testid="stVerticalBlock"] > div:first-child {
+            margin-top: 0 !important;
         }
         </style>
         """
