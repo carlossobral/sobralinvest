@@ -45,27 +45,13 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
-/* ── CORREÇÃO DO OVERFLOW ── */
-div[data-testid="stVerticalBlock"],
-div[data-testid="stVerticalBlockSeparator"] {
-    overflow: visible !important;
-}
-
-/* Garante que o iframe fantasma do components.html não ocupe espaço */
-iframe[height="0"] {
-    display: block !important;
-    height: 0 !important;
-    overflow: hidden !important;
-    border: none !important;
-}
-
 .header-container {
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
-    padding: 0.75rem 0 !important;
+    padding: 1rem 0 !important;
     margin: 0 !important;
     background-color: transparent !important;
     width: 100%;
-    /* SEM height fixo — deixa o conteúdo determinar a altura */
+    height: 100px;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -100,8 +86,8 @@ iframe[height="0"] {
 .nav-menu {
     display: flex;
     justify-content: center;
-    gap: 0.6rem;
-    margin-bottom: 0.6rem;
+    gap: 1rem;
+    margin-bottom: 1rem;
 }
 .nav-link {
     text-decoration: none;
@@ -127,23 +113,64 @@ iframe[height="0"] {
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 3. SCRIPT JAVASCRIPT — oculta o header nativo do Streamlit
+# 3. SCRIPT JAVASCRIPT DEFINITIVO (Trava o contêiner pai)
 # ==========================================================
-st.markdown("""
-<style>
-/* Oculta o header nativo do Streamlit para o nosso não ficar escondido atrás dele */
-header[data-testid="stHeader"] {
-    display: none !important;
-}
-/* Remove o padding-top que o Streamlit adiciona por causa do header nativo */
-.main > div:first-child {
-    padding-top: 0 !important;
-}
-section.main > div {
-    padding-top: 0.5rem !important;
-}
-</style>
-""", unsafe_allow_html=True)
+components.html("""
+<script>
+(function() {
+    const parentWindow = window.parent;
+    if (parentWindow.headerFixedInitialized) return;
+    parentWindow.headerFixedInitialized = true;
+
+    const parentDoc = parentWindow.document;
+
+    function fixAppHeader() {
+        const header = parentDoc.querySelector('.header-container');
+        if (!header) return;
+
+        const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+        if (!wrapper || wrapper.dataset.fixed === "true") return;
+
+        const placeholder = parentDoc.createElement('div');
+        placeholder.id = 'app-placeholder';
+        placeholder.style.height = wrapper.offsetHeight + 'px';
+        placeholder.style.width = '100%';
+        placeholder.style.flexShrink = '0';
+        
+        wrapper.parentNode.insertBefore(placeholder, wrapper);
+
+        wrapper.style.position = 'fixed';
+        wrapper.style.top = '0';
+        wrapper.style.left = '0';
+        wrapper.style.width = '100%';
+        wrapper.style.zIndex = '9999';
+        wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
+        wrapper.style.backdropFilter = 'blur(12px)';
+        wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
+        wrapper.style.paddingTop = '1rem';
+        wrapper.style.paddingBottom = '1rem';
+        wrapper.style.overflow = 'visible'; 
+        wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+        
+        wrapper.dataset.fixed = "true";
+    }
+
+    setTimeout(fixAppHeader, 150);
+    
+    const observer = new parentWindow.MutationObserver(() => {
+        const header = parentDoc.querySelector('.header-container');
+        if (header) {
+            const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+            if (wrapper && wrapper.dataset.fixed !== "true") {
+                fixAppHeader();
+            }
+        }
+    });
+    
+    observer.observe(parentDoc.body, { childList: true, subtree: true });
+})();
+</script>
+""", height=0, width=0)
 
 # ==========================================================
 # 4. TOOLTIPS E FUNÇÕES AUXILIARES
@@ -276,7 +303,7 @@ def get_ativo_detalhado(ticker):
 def render_header_and_menu(pagina, ticker_sel=None):
     titulo_pagina = ""
     subtitulo = ""
-
+    
     if pagina == "home":
         titulo_pagina = "🏠 Home"
         subtitulo = "Dashboard & Mercado"
@@ -290,73 +317,34 @@ def render_header_and_menu(pagina, ticker_sel=None):
         titulo_pagina = "📊 Comparativo"
         subtitulo = "Análise Relativa"
 
+    # HTML do Menu em links puros
+    menu_html = '<div class="nav-menu">'
     pages = [("home", "🏠 Home"), ("analise", "🔍 Análise"), ("rankings", "🏆 Rankings"), ("comparativo", "📊 Comparativo")]
-
-    nav_buttons = ""
     for key, label in pages:
-        active_style = "background:#1e3a8a; border-color:#3b82f6; color:#fff;" if pagina == key else "background:transparent; border-color:#334155; color:#94a3b8;"
-        nav_buttons += f"""
-        <button onclick="navigate('{key}')" style="
-            {active_style}
-            font-family: Inter, sans-serif;
-            font-size: 0.95rem;
-            font-weight: 600;
-            padding: 8px 16px;
-            border-radius: 8px;
-            border: 1px solid;
-            cursor: pointer;
-            transition: all 0.2s;
-        ">{label}</button>"""
-
-    components.html(f"""
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ background: transparent; font-family: Inter, sans-serif; }}
-        .wrapper {{
-            background: rgba(14, 17, 23, 0.97);
-            border-bottom: 1px solid #262730;
-            padding: 12px 16px 10px 16px;
-            width: 100%;
-        }}
-        .nav-menu {{
-            display: flex;
-            justify-content: center;
-            gap: 0.6rem;
-            margin-bottom: 10px;
-        }}
-        .header-row {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }}
-        .brand-name {{ font-size: 1.4rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; }}
-        .brand-tag  {{ font-size: 0.75rem; color: #64748b; font-weight: 500; }}
-        .page-title {{ font-size: 1.1rem; font-weight: 600; color: #38bdf8; text-align: right; }}
-        .page-sub   {{ font-size: 0.8rem; color: #94a3b8; text-align: right; }}
-    </style>
-    <div class="wrapper">
-        <div class="nav-menu">{nav_buttons}</div>
-        <div class="header-row">
-            <div>
-                <div class="brand-name">SOBRAL Invest</div>
-                <div class="brand-tag">Análise Fundamentalista &amp; Valuation</div>
+        active_class = "active" if pagina == key else ""
+        menu_html += f'<a href="?page={key}" class="nav-link {active_class}">{label}</a>'
+    menu_html += '</div>'
+    
+    # HTML do Header
+    header_html = f"""
+    <div class="header-container">
+        {menu_html}
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div class="header-brand">
+                <div>
+                    <div class="header-brand-name">SOBRAL Invest</div>
+                    <div class="header-brand-tag">Análise Fundamentalista & Valuation</div>
+                </div>
             </div>
-            <div>
-                <div class="page-title">{titulo_pagina}</div>
-                <div class="page-sub">{subtitulo}</div>
+            <div class="header-context">
+                <div class="header-page-title">{titulo_pagina}</div>
+                <div class="header-subtitle">{subtitulo}</div>
             </div>
         </div>
     </div>
-    <script>
-    function navigate(page) {{
-        // Navega na janela pai (Streamlit) sem abrir nova aba
-        const url = new URL(window.parent.location.href);
-        url.searchParams.set('page', page);
-        window.parent.location.href = url.toString();
-    }}
-    </script>
-    """, height=100, scrolling=False)
+    """
+    
+    st.markdown(header_html, unsafe_allow_html=True)
 
 # ==========================================================
 # 7. PÁGINAS
@@ -688,6 +676,7 @@ def pagina_comparativo():
 # 8. ROTEADOR PRINCIPAL
 # ==========================================================
 def main():
+    # 1. LÊ A NAVEGAÇÃO PELO LINK HTML (?page=...)
     if "page" in st.query_params:
         st.session_state["pagina_atual"] = st.query_params["page"]
         del st.query_params["page"]
@@ -704,6 +693,7 @@ def main():
     else:
         ticker_destino_temp = None
 
+    # --- BLOCO ÚNICO: MENU HTML + HEADER HTML (O JS vai fixar este contêiner inteiro) ---
     with st.container():
         pagina = st.session_state["pagina_atual"]
         
@@ -717,6 +707,7 @@ def main():
     if ticker_destino_temp:
         st.session_state["ticker_destino"] = None
 
+    # CONTEÚDO DA PÁGINA
     pagina = st.session_state["pagina_atual"]
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
