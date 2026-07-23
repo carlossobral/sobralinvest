@@ -85,8 +85,8 @@ st.markdown("""
 .nav-menu {
     display: flex;
     justify-content: center;
-    gap: 1rem;
-    margin-bottom: 1rem;
+    gap: 0.6rem;
+    margin-bottom: 0.6rem;
 }
 .nav-link {
     text-decoration: none;
@@ -124,37 +124,42 @@ components.html("""
     const parentDoc = parentWindow.document;
 
     function fixAppHeader() {
-        const header = parentDoc.querySelector('.header-container');
-        if (!header) return;
+    const header = parentDoc.querySelector('.header-container');
+    if (!header) return;
 
-        const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
-        if (!wrapper || wrapper.dataset.fixed === "true") return;
+    const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+    if (!wrapper || wrapper.dataset.fixed === "true") return;
 
-        const placeholder = parentDoc.createElement('div');
-        placeholder.id = 'app-placeholder';
-        placeholder.style.height = wrapper.offsetHeight + 'px';
-        placeholder.style.width = '100%';
-        placeholder.style.flexShrink = '0';
-        
-        wrapper.parentNode.insertBefore(placeholder, wrapper);
+    // Força o wrapper a mostrar tudo antes de medir
+    wrapper.style.overflow = 'visible';
 
-        wrapper.style.position = 'fixed';
-        wrapper.style.top = '0';
-        wrapper.style.left = '0';
-        wrapper.style.width = '100%';
-        wrapper.style.zIndex = '9999';
-        wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
-        wrapper.style.backdropFilter = 'blur(12px)';
-        wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
-        wrapper.style.paddingTop = '1rem';
-        wrapper.style.paddingBottom = '1rem';
-        wrapper.style.overflow = 'visible'; 
-        wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-        
-        wrapper.dataset.fixed = "true";
-    }
+    const realHeight = wrapper.scrollHeight;  // ← altura real do conteúdo
 
-    setTimeout(fixAppHeader, 500);
+    const placeholder = parentDoc.createElement('div');
+    placeholder.id = 'app-placeholder';
+    placeholder.style.height = realHeight + 'px';  // ← usa scrollHeight
+    placeholder.style.width = '100%';
+    placeholder.style.flexShrink = '0';
+    
+    wrapper.parentNode.insertBefore(placeholder, wrapper);
+
+    wrapper.style.position = 'fixed';
+    wrapper.style.top = '0';
+    wrapper.style.left = '0';
+    wrapper.style.width = '100%';
+    wrapper.style.zIndex = '9999';
+    wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
+    wrapper.style.backdropFilter = 'blur(12px)';
+    wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
+    wrapper.style.paddingTop = '0.75rem';
+    wrapper.style.paddingBottom = '0.75rem';
+    wrapper.style.overflow = 'visible'; 
+    wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+    
+    wrapper.dataset.fixed = "true";
+}
+
+setTimeout(fixAppHeader, 300);  // ← aumentei para 300ms para garantir render
     
     const observer = new parentWindow.MutationObserver(() => {
         const header = parentDoc.querySelector('.header-container');
