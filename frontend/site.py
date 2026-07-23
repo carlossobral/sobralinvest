@@ -675,7 +675,7 @@ def main():
                 st.session_state["pagina_atual"] = key
                 st.rerun()
                 
-        st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
 
         # HEADER
         pagina = st.session_state["pagina_atual"]
