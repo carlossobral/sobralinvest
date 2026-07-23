@@ -51,6 +51,7 @@ st.markdown("""
     margin: 0 !important;
     background-color: transparent !important;
     width: 100%;
+    height: 100px;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
