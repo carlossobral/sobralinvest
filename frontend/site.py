@@ -47,11 +47,10 @@ st.markdown("""
 
 .header-container {
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
-    padding: 1rem 0 !important;
+    padding: 0.75rem 0 !important;
     margin: 0 !important;
     background-color: transparent !important;
     width: 100%;
-    height: 100px;
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -155,7 +154,7 @@ components.html("""
         wrapper.dataset.fixed = "true";
     }
 
-    setTimeout(fixAppHeader, 150);
+    setTimeout(fixAppHeader, 500);
     
     const observer = new parentWindow.MutationObserver(() => {
         const header = parentDoc.querySelector('.header-container');
