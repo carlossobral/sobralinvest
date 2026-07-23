@@ -45,12 +45,27 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 .c * { font-family: 'Inter', sans-serif; } .c { padding: 0 8px 40px 8px; }
 
+/* ── CORREÇÃO DO OVERFLOW ── */
+div[data-testid="stVerticalBlock"],
+div[data-testid="stVerticalBlockSeparator"] {
+    overflow: visible !important;
+}
+
+/* Garante que o iframe fantasma do components.html não ocupe espaço */
+iframe[height="0"] {
+    display: block !important;
+    height: 0 !important;
+    overflow: hidden !important;
+    border: none !important;
+}
+
 .header-container {
     border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
     padding: 0.75rem 0 !important;
     margin: 0 !important;
     background-color: transparent !important;
     width: 100%;
+    /* SEM height fixo — deixa o conteúdo determinar a altura */
 }
 
 .header-brand { display: flex; align-items: center; gap: 12px; }
@@ -112,7 +127,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================================
-# 3. SCRIPT JAVASCRIPT DEFINITIVO (Trava o contêiner pai)
+# 3. SCRIPT JAVASCRIPT — aguarda DOM completo e usa scrollHeight
 # ==========================================================
 components.html("""
 <script>
@@ -124,43 +139,44 @@ components.html("""
     const parentDoc = parentWindow.document;
 
     function fixAppHeader() {
-    const header = parentDoc.querySelector('.header-container');
-    if (!header) return;
+        const header = parentDoc.querySelector('.header-container');
+        if (!header) return;
 
-    const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
-    if (!wrapper || wrapper.dataset.fixed === "true") return;
+        const wrapper = header.closest('div[data-testid="stVerticalBlock"]');
+        if (!wrapper || wrapper.dataset.fixed === "true") return;
 
-    // Força o wrapper a mostrar tudo antes de medir
-    wrapper.style.overflow = 'visible';
+        /* Libera overflow antes de medir para não truncar scrollHeight */
+        wrapper.style.overflow = 'visible';
 
-    const realHeight = wrapper.scrollHeight;  // ← altura real do conteúdo
+        const realHeight = wrapper.scrollHeight;
 
-    const placeholder = parentDoc.createElement('div');
-    placeholder.id = 'app-placeholder';
-    placeholder.style.height = realHeight + 'px';  // ← usa scrollHeight
-    placeholder.style.width = '100%';
-    placeholder.style.flexShrink = '0';
-    
-    wrapper.parentNode.insertBefore(placeholder, wrapper);
+        const placeholder = parentDoc.createElement('div');
+        placeholder.id = 'app-placeholder';
+        placeholder.style.height = realHeight + 'px';
+        placeholder.style.width = '100%';
+        placeholder.style.flexShrink = '0';
 
-    wrapper.style.position = 'fixed';
-    wrapper.style.top = '0';
-    wrapper.style.left = '0';
-    wrapper.style.width = '100%';
-    wrapper.style.zIndex = '9999';
-    wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
-    wrapper.style.backdropFilter = 'blur(12px)';
-    wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
-    wrapper.style.paddingTop = '0.75rem';
-    wrapper.style.paddingBottom = '0.75rem';
-    wrapper.style.overflow = 'visible'; 
-    wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
-    
-    wrapper.dataset.fixed = "true";
-}
+        wrapper.parentNode.insertBefore(placeholder, wrapper);
 
-setTimeout(fixAppHeader, 300);  // ← aumentei para 300ms para garantir render
-    
+        wrapper.style.position = 'fixed';
+        wrapper.style.top = '0';
+        wrapper.style.left = '0';
+        wrapper.style.width = '100%';
+        wrapper.style.zIndex = '9999';
+        wrapper.style.backgroundColor = 'rgba(14, 17, 23, 0.95)';
+        wrapper.style.backdropFilter = 'blur(12px)';
+        wrapper.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
+        wrapper.style.paddingTop = '0.75rem';
+        wrapper.style.paddingBottom = '0.75rem';
+        wrapper.style.overflow = 'visible';
+        wrapper.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+
+        wrapper.dataset.fixed = "true";
+    }
+
+    /* Aguarda 500ms para garantir que o Streamlit terminou de renderizar */
+    setTimeout(fixAppHeader, 500);
+
     const observer = new parentWindow.MutationObserver(() => {
         const header = parentDoc.querySelector('.header-container');
         if (header) {
@@ -170,7 +186,7 @@ setTimeout(fixAppHeader, 300);  // ← aumentei para 300ms para garantir render
             }
         }
     });
-    
+
     observer.observe(parentDoc.body, { childList: true, subtree: true });
 })();
 </script>
@@ -321,7 +337,6 @@ def render_header_and_menu(pagina, ticker_sel=None):
         titulo_pagina = "📊 Comparativo"
         subtitulo = "Análise Relativa"
 
-    # HTML do Menu em links puros
     menu_html = '<div class="nav-menu">'
     pages = [("home", "🏠 Home"), ("analise", "🔍 Análise"), ("rankings", "🏆 Rankings"), ("comparativo", "📊 Comparativo")]
     for key, label in pages:
@@ -329,7 +344,6 @@ def render_header_and_menu(pagina, ticker_sel=None):
         menu_html += f'<a href="?page={key}" class="nav-link {active_class}">{label}</a>'
     menu_html += '</div>'
     
-    # HTML do Header
     header_html = f"""
     <div class="header-container">
         {menu_html}
@@ -680,7 +694,6 @@ def pagina_comparativo():
 # 8. ROTEADOR PRINCIPAL
 # ==========================================================
 def main():
-    # 1. LÊ A NAVEGAÇÃO PELO LINK HTML (?page=...)
     if "page" in st.query_params:
         st.session_state["pagina_atual"] = st.query_params["page"]
         del st.query_params["page"]
@@ -697,7 +710,6 @@ def main():
     else:
         ticker_destino_temp = None
 
-    # --- BLOCO ÚNICO: MENU HTML + HEADER HTML (O JS vai fixar este contêiner inteiro) ---
     with st.container():
         pagina = st.session_state["pagina_atual"]
         
@@ -711,7 +723,6 @@ def main():
     if ticker_destino_temp:
         st.session_state["ticker_destino"] = None
 
-    # CONTEÚDO DA PÁGINA
     pagina = st.session_state["pagina_atual"]
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
