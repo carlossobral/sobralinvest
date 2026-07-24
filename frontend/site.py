@@ -56,12 +56,58 @@ supabase = init_supabase()
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* ==========================================================
+   1. REGRA ORIGINAL: ESCONDER MENU, FOOTER E SIDEBAR
+   ========================================================== */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.stDeployButton {display: none;}
+section[data-testid="stSidebar"] { display: none !important; }
+button[kind="header"] { display: none !important; }
+
+section[data-testid="stMain"] {
+    padding-top: 0.5rem !important; 
+}
+section[data-testid="stAppViewContainer"] {
+    padding-top: 0 !important;
+}
+section[data-testid="stMain"] > div[data-testid="stVerticalBlock"] > div:first-child {
+    margin-top: 0 !important;
+}
+
+/* ==========================================================
+   2. REGRA ORIGINAL: HEADER PERSONALIZADO
+   ========================================================== */
 .c * { font-family: 'Inter', sans-serif; } 
 .c { padding: 0 8px 40px 8px; }
 
+.header-container {
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center;
+    border-bottom: 1px solid var(--secondary-background-color, #262730) !important;
+    padding: 1rem 0 !important;
+    margin: 0 !important;
+    background-color: transparent !important;
+    width: 100%;
+}
+
+.header-brand { display: flex; align-items: center; gap: 12px; }
+.header-brand-name { font-size: 1.4rem; font-weight: 800; color: #f1f5f9; letter-spacing: -0.03em; line-height: 1.2; }
+.header-brand-tag { font-size: 0.75rem; color: #64748b; font-weight: 500; }
+.header-context { text-align: right; }
+.header-page-title { font-size: 1.1rem; font-weight: 600; color: #38bdf8; margin-bottom: 2px; }
+.header-subtitle { font-size: 0.8rem; color: #94a3b8; }
+
+/* ==========================================================
+   3. ESTILOS GERAIS E SEÇÕES
+   ========================================================== */
 .st { font-size: 1.05rem; font-weight: 700; color: #f1f5f9; text-transform: uppercase; letter-spacing: 0.1em; margin: 40px 0 22px 0; padding-bottom: 10px; border-bottom: 2px solid #334155; display: flex; align-items: center; gap: 10px; }
 
-/* CARD PRINCIPAL: Overflow visible é CRUCIAL para o tooltip não ser cortado */
+/* ==========================================================
+   4. CARDS (MC) - COM CORREÇÃO DE OVERFLOW PARA O TOOLTIP
+   ========================================================== */
 .mc { 
     background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); 
     border: 1px solid #334155; 
@@ -75,7 +121,7 @@ st.markdown("""
     justify-content: space-between; 
     min-height: 95px; 
     position: relative;
-    overflow: visible !important; /* PERMITE O TOOLTIP SAIR DO CARD */
+    overflow: visible !important; /* CRUCIAL: Permite o tooltip sair do card */
     z-index: 1;
 }
 .mc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.25); border-color: #3b82f6; z-index: 10; }
@@ -83,20 +129,23 @@ st.markdown("""
 .ml { font-size: 0.72rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; line-height: 1.3; display: flex; align-items: center; }
 .mv { font-size: 1.45rem; font-weight: 700; color: #f1f5f9; line-height: 1.1; letter-spacing: -0.02em; }
 
-/* SCORE CARD */
+/* ==========================================================
+   5. SCORE CARD E PREÇO JUSTO
+   ========================================================== */
 .sc { border-radius: 16px; padding: 24px; text-align: center; box-shadow: 0 10px 15px rgba(0,0,0,0.2); }
 .sn { font-size: 3.5rem; font-weight: 800; line-height: 1; margin-bottom: 8px; }
 .sl { font-size: 1.1rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
 .sd { font-size: 0.8rem; color: #94a3b8; margin-top: 6px; }
 
-/* PREÇO JUSTO CARD */
 .pc { background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 12px; padding: 16px; text-align: center; transition: all 0.3s ease; }
 .pc:hover { transform: translateY(-2px); box-shadow: 0 8px 12px rgba(0,0,0,0.2); }
 .pt { font-size: 0.7rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .pv { font-size: 1.2rem; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; }
 .pu { font-size: 0.9rem; font-weight: 600; padding: 3px 10px; border-radius: 12px; display: inline-block; }
 
-/* TOOLTIP CORRIGIDO */
+/* ==========================================================
+   6. TOOLTIP CORRIGIDO (Abre para cima e fica por cima de tudo)
+   ========================================================== */
 .tt { position: relative; display: inline-flex; align-items: center; cursor: help; z-index: 20; }
 .tt-i { 
     display: inline-flex; align-items: center; justify-content: center; 
