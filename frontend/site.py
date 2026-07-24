@@ -21,17 +21,35 @@ hide_menu_style = """
         section[data-testid="stSidebar"] { display: none !important; }
         button[kind="header"] { display: none !important; }
         
-        /* ELIMINA O ESPAÇAMENTO GIGANTE DO TOPO DO STREAMLIT */
-        section[data-testid="stMain"] {
-            padding-top: 0.5rem !important; 
-        }
-        section[data-testid="stAppViewContainer"] {
-            padding-top: 0 !important;
-        }
-        /* Remove a margem do primeiro bloco vertical dentro do Main */
-        section[data-testid="stMain"] > div[data-testid="stVerticalBlock"] > div:first-child {
-            margin-top: 0 !important;
-        }
+/* ELIMINA COMPLETAMENTE O ESPAÇAMENTO DO TOPO */
+section[data-testid="stMain"] {
+    padding-top: 0 !important; 
+    margin-top: 0 !important;
+}
+
+section[data-testid="stAppViewContainer"] {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Remove margem do primeiro bloco */
+section[data-testid="stMain"] > div[data-testid="stVerticalBlock"] > div:first-child {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+
+/* Remove padding do header padrão do Streamlit (se existir) */
+header[data-testid="stHeader"] {
+    height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* Garante que o container principal comece no topo */
+.main .block-container {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
         </style>
         """
 st.markdown(hide_menu_style, unsafe_allow_html=True)
