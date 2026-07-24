@@ -1,0 +1,144 @@
+from datetime import datetime, UTC
+import time
+import math
+import yfinance as yf
+from etl.database.supabase_client import supabase
+
+# ==========================================================
+# CONFIGURAÇÃO DE ANOS (Controle manual igual ao etl_indicadores)
+# ==========================================================
+ANO_INICIAL = 2015
+ANO_FINAL = datetime.now().year
+
+# Tickers que não são ações operacionais e devem ser ignorados
+TICKERS_IGNORADOS = {"IBOV"}
+
+def safe_float(v):
+    try:
+        f = float(v)
+        if math.isnan(f): return None
+        return f
+    except:
+        return None
+
+def safe_int(v):
+    try:
+        i = int(v)
+        if math.isnan(i): return 0
+        return i
+    except:
+        return 0
+
+def registrar_carga(status: str, registros: int, mensagem: str):
+    supabase.table("etl_cargas").insert({
+        "processo": "etl_cotacoes_yf",
+        "inicio": datetime.now(UTC).isoformat(),
+        "status": status,
+        "registros": registros,
+        "mensagem": mensagem,
+    }).execute()
+
+def carregar_ticker(ticker: str):
+    # Regra 2: Usa start e end baseados nos anos configurados. Não pula mesmo se já existir dado.
+    start_date = f"{ANO_INICIAL}-01-01"
+    end_date = f"{ANO_FINAL}-12-31"
+    
+    df = yf.download(
+        f"{ticker}.SA",
+        start=start_date,
+        end=end_date,
+        # Regra 1: auto_adjust=True faz com que a coluna 'Close' já venha ajustada (Adj Close)
+        auto_adjust=True, 
+        progress=False,
+        threads=False
+    )
+
+    if df.empty:
+        return 0
+
+    # Normaliza as colunas caso venha com multi-index (acontece em algumas versões do yfinance)
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+        df.columns = df.columns.get_level_values(0)
+
+    registros = []
+
+    for data, row in df.iterrows():
+        fechamento = safe_float(row["Close"])
+        volume = safe_int(row["Volume"])
+        
+        # Regra 4: Cálculo do volume financeiro
+        vol_fin = (fechamento * volume) if fechamento and volume else 0.0
+
+        registros.append({
+            "ticker": ticker,
+            "data": data.strftime("%Y-%m-%d"),
+            "abertura": safe_float(row["Open"]),
+            "maxima": safe_float(row["High"]),
+            "minima": safe_float(row["Low"]),
+            "fechamento": fechamento, # Já é o preço ajustado
+            "volume": volume,
+            "volume_financeiro": vol_fin
+        })
+
+    if not registros:
+        return 0
+        
+    # Upsert diário (atualiza dias faltantes e insere novos)
+    lote = 500
+    for i in range(0, len(registros), lote):
+        supabase.table("cotacoes").upsert(
+            registros[i:i + lote],
+            on_conflict="ticker,data"
+        ).execute()
+
+    return len(registros)
+
+def main():
+    print(f"Iniciando carga de cotações via yfinance ({ANO_INICIAL}-{ANO_FINAL})...")
+    
+    total_registros = 0
+    processados = 0
+    ignorados = 0
+    
+    try:
+        # Busca todos os tickers
+        empresas = supabase.table("empresas").select("ticker").order("ticker").execute().data
+        print(f"Empresas encontradas: {len(empresas)}\n")
+
+        for i, empresa in enumerate(empresas, start=1):
+            ticker = empresa["ticker"]
+
+            # Regra 5: Ignora IBOV e índices
+            if ticker in TICKERS_IGNORADOS:
+                ignorados += 1
+                continue
+
+            print(f"[{i}/{len(empresas)}] {ticker}...", end=" ")
+            
+            try:
+                total = carregar_ticker(ticker)
+                total_registros += total
+                processados += 1
+                print(f"{total} registros atualizados.")
+                
+                # Regra 3: Sleep para evitar banimento do Yahoo Finance
+                time.sleep(1) 
+                
+            except Exception as e:
+                print(f"ERRO: {e}")
+
+        mensagem = f"{processados} tickers atualizados. {ignorados} ignorados."
+        registrar_carga("SUCESSO", total_registros, mensagem)
+        
+        print("\n========== FINAL ==========")
+        print(f"Tickers processados : {processados}")
+        print(f"Tickers ignorados   : {ignorados}")
+        print(f"Registros gravados  : {total_registros}")
+
+    except Exception as e:
+        registrar_carga("ERRO", 0, str(e))
+        print(f"\n❌ ERRO FATAL: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
