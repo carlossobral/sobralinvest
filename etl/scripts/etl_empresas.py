@@ -25,7 +25,7 @@ TICKERS_IGNORADOS = {
     "PATI3", "PATI4", "PEAB3", "PEAB4", "PLAS3", "PPAR3", "PPLA11", "PTCA3", 
     "QUSW3", "RPAD3", "RPAD5", "RPAD6", "RPMG3", "RSID3", "SNSY3", "SNSY5", 
     "SNSY6", "SOND3", "SOND5", "SOND6", "TELB3", "TELB4", "TRAD3", "TXRX3", "TXRX4", 
-    "VSPT3", "VSPT4"
+    "VSPT3", "VSPT4", "IBOV"
 }
 
 def normalizar_cnpj(cnpj):
