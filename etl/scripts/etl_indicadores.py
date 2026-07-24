@@ -7,10 +7,10 @@ from etl.database.supabase_client import supabase
 TAXA_IMPOSTO = 0.34
 
 # Controle de Anos (Igual ao etl_fundamentos_cvm)
-#ANO_FINAL = 2026
-#ANO_INICIAL = 2015
-ANO_FINAL = datetime.now().year
-ANO_INICIAL = ANO_FINAL - 1
+ANO_FINAL = 2026
+ANO_INICIAL = 2015
+#ANO_FINAL = datetime.now().year
+#ANO_INICIAL = ANO_FINAL - 1
 
 def safe_float(v):
     try:
