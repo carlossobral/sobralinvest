@@ -508,8 +508,8 @@ def processar_ano(ano, tipo_doc, mapa_tickers, mapa_acoes_individual):
                 df_final['ativo_total'] - df_final['patrimonio_liquido']
             )
 
-        # OPÇÃO B: Mapear tickers (Agora retorna uma lista)
-        df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str)
+        # CORREÇÃO: Remove o ".0" que o Pandas coloca nos números do CSV da CVM
+        df_final['CD_CVM_STR'] = df_final['CD_CVM'].astype(str).str.split('.').str[0]
         df_final['ticker_list'] = df_final['CD_CVM_STR'].map(mapa_tickers)
         
         # OPÇÃO B: Explodir a lista de tickers para duplicar as linhas (ON/PN/Unit)
