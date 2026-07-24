@@ -10,49 +10,21 @@ import plotly.graph_objects as go
 # ==========================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CONEXÃO SUPABASE
 # ==========================================================
-st.set_page_config(page_title="Sobral Invest", page_icon="📊", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(
+    page_title="Sobral Invest", 
+    page_icon="📊", 
+    layout="wide", 
+    initial_sidebar_state="collapsed"
+)
 
-hide_menu_style = """
-        <style>
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        .stDeployButton {display: none;}
-        /* ESCONDE A SIDEBAR NATIVA DO STREAMLIT */
-        section[data-testid="stSidebar"] { display: none !important; }
-        button[kind="header"] { display: none !important; }
-        
-/* ELIMINA COMPLETAMENTE O ESPAÇAMENTO DO TOPO */
-section[data-testid="stMain"] {
-    padding-top: 0 !important; 
-    margin-top: 0 !important;
-}
-
-section[data-testid="stAppViewContainer"] {
-    padding-top: 0 !important;
-    margin-top: 0 !important;
-}
-
-/* Remove margem do primeiro bloco */
-section[data-testid="stMain"] > div[data-testid="stVerticalBlock"] > div:first-child {
-    margin-top: 0 !important;
-    padding-top: 0 !important;
-}
-
-/* Remove padding do header padrão do Streamlit (se existir) */
-header[data-testid="stHeader"] {
-    height: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-}
-
-/* Garante que o container principal comece no topo */
-.main .block-container {
-    padding-top: 0 !important;
-    margin-top: 0 !important;
-}
-        </style>
-        """
-st.markdown(hide_menu_style, unsafe_allow_html=True)
+# Remove o header padrão do Streamlit (a barra cinza do topo)
+st.markdown("""
+    <style>
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 @st.cache_resource
 def init_supabase():
