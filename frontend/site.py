@@ -6,6 +6,28 @@ from supabase import create_client
 from dotenv import load_dotenv
 from pathlib import Path
 import plotly.graph_objects as go
+import yfinance as yf
+from datetime import datetime
+
+# ==========================================================
+# CONFIGURAÇÕES GLOBAIS
+# ==========================================================
+TICKERS_IGNORADOS = {
+    "AFLT3", "AHEB3", "AHEB5", "AHEB6", "APTI3", "APTI4", "AURA33", "BALM3", 
+    "BALM4", "BBML3", "BDLL3", "BDLL4", "BOBR3", "BOBR4", "BRQB3", "CALI3", 
+    "CASN3", "CASN4", "CATA3", "CATA4", "CEGR3", "CTAX3", "CTCA3", "CTKA3", 
+    "CTKA4", "CTSA3", "CTSA4", "DOHL3", "DOHL4", "DTCY3", "DTCY4", "EALT3", 
+    "EALT4", "EKTR3", "EKTR4", "ENMT3", "ENMT4", "EPAR3", "ESTR3", "ESTR4", 
+    "FIGE3", "FIGE4", "G2DI33", "GOLL54", "GPAR3", "GSHP3", "HBTS3", "HBTS5", "HBTS6", 
+    "HETA3", "HETA4", "HOOT3", "HOOT4", "IGSN3", "JFEN3", "JOPA3", "JOPA4", 
+    "LMED3", "LTEL3B", "LUXM3", "LUXM4", "MAPT3", "MAPT4", "MGEL3", "MGEL4", 
+    "MMAQ3", "MMAQ4", "MNDL3", "MRSA3B", "MRSA5B", "MRSA6B", "MSPA3", "MSPA4", 
+    "MWET3", "MWET4", "NEMO3", "ODER3", "ODER4", "OIBR3", "OIBR4", "OSXB3", 
+    "PATI3", "PATI4", "PEAB3", "PEAB4", "PLAS3", "PPAR3", "PPLA11", "PTCA3", 
+    "QUSW3", "RPAD3", "RPAD5", "RPAD6", "RPMG3", "RSID3", "SNSY3", "SNSY5", 
+    "SNSY6", "SOND3", "SOND5", "SOND6", "TELB3", "TELB4", "TRAD3", "TXRX3", "TXRX4", 
+    "VSPT3", "VSPT4", "IBOV"
+}
 
 # ==========================================================
 # 1. CONFIGURAÇÃO DA PÁGINA E CONEXÃO SUPABASE
@@ -340,7 +362,68 @@ def get_ativo_detalhado(ticker):
     return emp
 
 # ==========================================================
-# 5. HEADER UNIFICADO
+# 5. GATILHO ETL YFINANCE (Webhook para cron-job.org)
+# ==========================================================
+def rodar_etl_cotacoes_yf():
+    st.title("Executando ETL Cotações YFinance...")
+    st.write("Iniciando atualização de cotações via yfinance...")
+    
+    try:
+        empresas = supabase.table("empresas").select("ticker").execute().data
+        tickers = [e['ticker'] for e in empresas if e['ticker'] not in TICKERS_IGNORADOS]
+        
+        if not tickers:
+            st.write("Nenhum ticker para baixar.")
+            return
+
+        # Adiciona o sufixo .SA para o Yahoo Finance
+        tickers_yf = [f"{t}.SA" for t in tickers]
+        
+        # Baixa TODOS os tickers de uma vez (Leva uns 15 segundos)
+        hoje = datetime.now().strftime("%Y-%m-%d")
+        st.write(f"Baixando dados de {len(tickers_yf)} ativos... Aguarde.")
+        df = yf.download(tickers_yf, start="2015-01-01", end=hoje, auto_adjust=True, progress=False, threads=True)
+        
+        if df.empty:
+            st.write("Erro: Yahoo Finance não retornou dados.")
+            return
+
+        registros = []
+        # Como passamos vários tickers, o yfinance cria colunas duplas (MultiIndex)
+        for ticker in tickers:
+            try:
+                # Extrai os dados apenas deste ticker
+                df_ticker = df.xs(ticker, level=1, axis=1).dropna()
+                for data, row in df_ticker.iterrows():
+                    fechamento = float(row["Close"])
+                    volume = int(row["Volume"]) if not pd.isna(row["Volume"]) else 0
+                    registros.append({
+                        "ticker": ticker,
+                        "data": data.strftime("%Y-%m-%d"),
+                        "abertura": float(row["Open"]),
+                        "maxima": float(row["High"]),
+                        "minima": float(row["Low"]),
+                        "fechamento": fechamento,
+                        "volume": volume,
+                        "volume_financeiro": fechamento * volume
+                    })
+            except KeyError:
+                continue # Ticker não encontrado no lote do Yahoo
+
+        # Salva no Supabase em lotes
+        lote = 500
+        for i in range(0, len(registros), lote):
+            supabase.table("cotacoes").upsert(
+                registros[i:i + lote],
+                on_conflict="ticker,data"
+            ).execute()
+            
+        st.write(f"✅ Concluído! {len(registros)} registros salvos.")
+    except Exception as e:
+        st.error(f"Erro no ETL: {e}")
+
+# ==========================================================
+# 6. HEADER UNIFICADO
 # ==========================================================
 def render_header(pagina, ticker_sel=None):
     titulo_pagina = ""
@@ -375,7 +458,7 @@ def render_header(pagina, ticker_sel=None):
     """, unsafe_allow_html=True)
 
 # ==========================================================
-# 6. PÁGINAS
+# 7. PÁGINAS
 # ==========================================================
 def pagina_home():
     st.markdown("### 📈 Ibovespa")
@@ -701,9 +784,14 @@ def pagina_comparativo():
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================================
-# 7. ROTEADOR PRINCIPAL
+# 8. ROTEADOR PRINCIPAL
 # ==========================================================
 def main():
+    # GATILHO SECRETO PARA O CRON-JOB.ORG (ETL COTAÇÕES)
+    if "etl_cotacoes" in st.query_params:
+        rodar_etl_cotacoes_yf()
+        return # Interrompe aqui, não carrega o resto do site
+
     if "pagina_atual" not in st.session_state:
         st.session_state["pagina_atual"] = "home"
     if "ticker_destino" not in st.session_state:
