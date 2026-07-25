@@ -114,7 +114,7 @@ def main():
         empresas = supabase.table("empresas").select("ticker").order("ticker").execute().data
         print(f"Empresas encontradas: {len(empresas)}\n")
 
-        for i, empresa in enumerate(empresas, start=1):
+                for i, empresa in enumerate(empresas, start=1):
             ticker = empresa["ticker"]
 
             if ticker in TICKERS_IGNORADOS:
@@ -125,11 +125,22 @@ def main():
             
             try:
                 total = carregar_ticker(ticker)
+                
+                # Se retornou 0, tenta novamente após 2 segundos (Retry para evitar timeout do Yahoo)
+                if total == 0:
+                    time.sleep(2)
+                    total = carregar_ticker(ticker)
+
                 total_registros += total
                 processados += 1
-                print(f"{total} registros atualizados.")
                 
-                time.sleep(1) 
+                if total > 0:
+                    print(f"{total} registros atualizados.")
+                else:
+                    print("Sem dados (Delistada ou erro no Yahoo).")
+                
+                # Regra 3: Sleep aumentado para 1.5s para evitar banimento/timeout
+                time.sleep(1.5) 
                 
             except Exception as e:
                 print(f"ERRO: {e}")
