@@ -114,7 +114,7 @@ def main():
         empresas = supabase.table("empresas").select("ticker").order("ticker").execute().data
         print(f"Empresas encontradas: {len(empresas)}\n")
 
-                for i, empresa in enumerate(empresas, start=1):
+        for i, empresa in enumerate(empresas, start=1):
             ticker = empresa["ticker"]
 
             if ticker in TICKERS_IGNORADOS:
