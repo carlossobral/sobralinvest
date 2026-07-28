@@ -20,23 +20,8 @@ from datetime import datetime
 from etl.database.supabase_client import supabase
 
 # ==========================================================
-# 1. BUSCAR DATA_CÁLCULO E CARREGAR DADOS
+# 1. CARREGAR DADOS
 # ==========================================================
-print("Buscando data do último cálculo...")
-resp = (
-    supabase.table("indicadores")
-    .select("data_calculo")
-    .order("data_calculo", desc=True)
-    .limit(1)
-    .execute()
-)
-
-if not resp.data:
-    raise Exception("Nenhum cálculo encontrado.")
-
-data_calculo = resp.data[0]["data_calculo"]
-print(f"Data encontrada: {data_calculo}")
-
 print("Carregando empresas...")
 dados_emp = []
 offset = 0
@@ -47,15 +32,27 @@ while True:
     offset += 1000
 empresas_df = pd.DataFrame(dados_emp)
 
-print("Carregando indicadores...")
+print("Carregando todos os indicadores históricos...")
 dados_ind = []
 offset = 0
 while True:
-    chunk = supabase.table("indicadores").select("*").eq("data_calculo", data_calculo).range(offset, offset + 999).execute().data
+    chunk = supabase.table("indicadores").select("*").range(offset, offset + 999).execute().data
     dados_ind.extend(chunk)
     if len(chunk) < 1000: break
     offset += 1000
-indicadores_df = pd.DataFrame(dados_ind)
+
+if not dados_ind:
+    raise Exception("Nenhum indicador encontrado.")
+
+ind_df_full = pd.DataFrame(dados_ind)
+
+print("Filtrando o indicador mais recente de cada ativo...")
+# Ordena por ticker e data_balanco (mais recente primeiro)
+ind_df_full = ind_df_full.sort_values(by=['ticker', 'data_balanco'], ascending=[True, False])
+# Mantém apenas a primeira linha de cada ticker (que é a mais recente)
+indicadores_df = ind_df_full.drop_duplicates(subset=['ticker'], keep='first').reset_index(drop=True)
+
+print(f"{len(indicadores_df)} ativos com indicadores recentes carregados.")
 
 print("Carregando métricas setoriais...")
 metricas_df = pd.DataFrame(supabase.table("metricas_score").select("*").execute().data)
@@ -74,19 +71,14 @@ dividendos_df = pd.DataFrame(dados_div)
 # 2. HISTÓRICOS (ROE E DIVIDENDOS)
 # ==========================================================
 print("Calculando histórico do ROE (5 anos completos)...")
-hist_roe_resp = []
-offset = 0
-while True:
-    chunk = supabase.table("indicadores").select("ticker, ano, roe").range(offset, offset + 999).execute().data
-    hist_roe_resp.extend(chunk)
-    if len(chunk) < 1000: break
-    offset += 1000
+# Usa o DataFrame completo para pegar o histórico, não apenas o mais recente
+hist_roe_df = ind_df_full[['ticker', 'ano', 'roe']].copy()
 
-hist_roe_df = pd.DataFrame(hist_roe_resp)
 ano_atual = datetime.now().year
 anos_disponiveis = [a for a in sorted(hist_roe_df["ano"].unique(), reverse=True) if a < ano_atual][:5]
 hist_roe_df = hist_roe_df[hist_roe_df['ano'].isin(anos_disponiveis)]
 
+hist_roe_df['roe'] = pd.to_numeric(hist_roe_df['roe'], errors='coerce')
 hist_roe_df['roe_10'] = hist_roe_df['roe'] >= 0.10
 consistencia_roe = hist_roe_df.groupby('ticker')['roe_10'].sum().reset_index()
 consistencia_roe.columns = ['ticker', 'anos_roe_10']
@@ -128,6 +120,7 @@ def med_pos(serie):
     s = s[s > 0]
     return s.median() if not s.empty else None
 
+# Mediana de mercado usando todos os indicadores recentes carregados
 mkt_medians = df.groupby('data_balanco').agg(
     pl_mkt=('p_l', med_pos), pvp_mkt=('p_vp', med_pos), ev_ebit_mkt=('ev_ebit', med_pos),
     roe_mkt=('roe', med_pos), roic_mkt=('roic', med_pos)
