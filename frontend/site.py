@@ -39,7 +39,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Remove o header padrão do Streamlit (a barra cinza do topo)
 st.markdown("""
     <style>
     header[data-testid="stHeader"] {
@@ -177,8 +176,8 @@ section[data-testid="stMain"] > div[data-testid="stVerticalBlock"] > div:first-c
     border-radius: 8px; 
     padding: 10px 12px; 
     position: absolute; 
-    z-index: 9999 !important; /* FORÇA FICAR POR CIMA DE TUDO */
-    bottom: calc(100% + 12px); /* ABRE PARA CIMA DO ÍCONE */
+    z-index: 9999 !important; 
+    bottom: calc(100% + 12px); 
     left: 50%; 
     transform: translateX(-50%); 
     opacity: 0; 
@@ -189,7 +188,6 @@ section[data-testid="stMain"] > div[data-testid="stVerticalBlock"] > div:first-c
     pointer-events: none;
 }
 
-/* Seta do tooltip apontando para baixo */
 .tt-t::after { 
     content: ""; 
     position: absolute; 
@@ -260,49 +258,42 @@ def tooltip(t):
 
 def sem_color(label, val_str):
     try:
-        # Limpeza robusta para garantir conversão em float (lida com negativos, %, R$, x)
         clean_val = str(val_str).replace('R$', '').replace('x', '').replace('%', '').replace('+', '').strip()
         val = float(clean_val)
     except:
-        return "#94a3b8" # Cinza para N/A ou erro de conversão
+        return "#94a3b8"
 
     l = label.lower()
 
-    # 1. Múltiplos de Valuation (MENOR é MELHOR)
     if any(k in l for k in ["p/l", "p/vp", "p/receita", "p/ativo", "p/cap", "p/ebit", "p/ativo circ", "ev/ebit", "ev/ebitda", "passivo/ativos"]):
-        if val <= 0: return "#94a3b8" # Múltiplos negativos geralmente são distorções contábeis
-        if val <= 10: return "#10b981" # Verde (Barato)
-        if val <= 20: return "#f59e0b" # Amarelo (Razoável)
-        return "#ef4444" # Vermelho (Caro)
+        if val <= 0: return "#94a3b8"
+        if val <= 10: return "#10b981"
+        if val <= 20: return "#f59e0b"
+        return "#ef4444"
 
-    # 2. Endividamento (Dívida Líquida)
     if "dív. líq" in l or "div_liq" in l:
-        if val < 0: return "#10b981" # Caixa Líquido é excelente (Verde)
-        if val <= 1.5: return "#10b981" # Verde (Saudável)
-        if val <= 3.0: return "#f59e0b" # Amarelo (Atenção)
-        return "#ef4444" # Vermelho (Alto risco)
+        if val < 0: return "#10b981"
+        if val <= 1.5: return "#10b981"
+        if val <= 3.0: return "#f59e0b"
+        return "#ef4444"
 
-    # 3. Rentabilidade, Crescimento e Upside (MAIOR é MELHOR)
     if any(k in l for k in ["roe", "roic", "roa", "margem", "dy", "cagr", "upside", "giro"]):
         if "upside" in l:
-            return "#10b981" if val > 0 else "#ef4444" # Upside: >0 verde, <0 vermelho
-        if val >= 15: return "#10b981" # Verde (Excelente)
-        if val >= 5: return "#f59e0b"  # Amarelo (Razoável)
-        return "#ef4444" # Vermelho (Fraco/Negativo)
+            return "#10b981" if val > 0 else "#ef4444"
+        if val >= 15: return "#10b981"
+        if val >= 5: return "#f59e0b"
+        return "#ef4444"
 
-    # 4. Liquidez Corrente
     if "liq. corrente" in l:
         if val >= 1.5: return "#10b981"
         if val >= 1.0: return "#f59e0b"
         return "#ef4444"
 
-    # 5. Score
     if "score" in l:
         if val >= 80: return "#10b981"
         if val >= 60: return "#f59e0b"
         return "#ef4444"
 
-    # Default para neutros
     return "#38bdf8"
 
 # ==========================================================
@@ -310,22 +301,32 @@ def sem_color(label, val_str):
 # ==========================================================
 @st.cache_data(ttl=3600)
 def load_data():
+    # Busca os scores mais recentes
     resp_score = supabase.table("score").select("ticker, score, rentabilidade, crescimento, seguranca, dividendos, valuation, data_balanco").order("data_balanco", desc=True).limit(1000).execute()
     df_score = pd.DataFrame(resp_score.data)
     if df_score.empty: return pd.DataFrame()
     
-    data_max = df_score['data_balanco'].max()
-    df_score = df_score[df_score['data_balanco'] == data_max]
+    # Pega o registro de score mais recente DE CADA ATIVO
+    df_score = df_score.sort_values(by=['ticker', 'data_balanco'], ascending=[True, False])
+    df_score = df_score.drop_duplicates(subset=['ticker'], keep='first')
     
-    resp_ind = supabase.table("indicadores").select("*").eq("data_balanco", data_max).execute()
+    # Busca os indicadores mais recentes
+    resp_ind = supabase.table("indicadores").select("*").order("data_balanco", desc=True).limit(1000).execute()
     df_ind = pd.DataFrame(resp_ind.data)
     
+    # Pega o registro de indicador mais recente DE CADA ATIVO
+    df_ind = df_ind.sort_values(by=['ticker', 'data_balanco'], ascending=[True, False])
+    df_ind = df_ind.drop_duplicates(subset=['ticker'], keep='first')
+    
+    # Busca empresas
     resp_emp = supabase.table("empresas").select("ticker, nome, setor, subsetor, segmento, qtd_acoes_totais").execute()
     df_emp = pd.DataFrame(resp_emp.data)
     
+    # Merge
     df = df_score.merge(df_emp, on="ticker", how="left")
     df = df.merge(df_ind, on="ticker", how="left")
     
+    # Busca cotação mais recente
     resp_cot_date = supabase.table("cotacoes").select("data").order("data", desc=True).limit(1).execute()
     if resp_cot_date.data:
         latest_date = resp_cot_date.data[0]['data']
@@ -342,13 +343,16 @@ def load_data():
 
 @st.cache_data(ttl=3600)
 def get_ativo_detalhado(ticker):
+    # Busca o registro mais recente deste ticker específico
     emp = supabase.table("empresas").select("*").eq("ticker", ticker).execute().data
     if not emp: return None
     emp = emp[0]
     
+    # Busca o Score mais recente deste ticker
     sc = supabase.table("score").select("*").eq("ticker", ticker).order("data_balanco", desc=True).limit(1).execute().data
     if sc: emp.update(sc[0])
         
+    # Busca o Indicador mais recente deste ticker
     ind = supabase.table("indicadores").select("*").eq("ticker", ticker).order("data_balanco", desc=True).limit(1).execute().data
     if ind: emp.update(ind[0])
         
@@ -376,10 +380,8 @@ def rodar_etl_cotacoes_yf():
             st.write("Nenhum ticker para baixar.")
             return
 
-        # Adiciona o sufixo .SA para o Yahoo Finance
         tickers_yf = [f"{t}.SA" for t in tickers]
         
-        # Baixa TODOS os tickers de uma vez (Leva uns 15 segundos)
         hoje = datetime.now().strftime("%Y-%m-%d")
         st.write(f"Baixando dados de {len(tickers_yf)} ativos... Aguarde.")
         df = yf.download(tickers_yf, start="2015-01-01", end=hoje, auto_adjust=True, progress=False, threads=True)
@@ -389,10 +391,8 @@ def rodar_etl_cotacoes_yf():
             return
 
         registros = []
-        # Como passamos vários tickers, o yfinance cria colunas duplas (MultiIndex)
         for ticker in tickers:
             try:
-                # Extrai os dados apenas deste ticker
                 df_ticker = df.xs(ticker, level=1, axis=1).dropna()
                 for data, row in df_ticker.iterrows():
                     fechamento = float(row["Close"])
@@ -408,9 +408,8 @@ def rodar_etl_cotacoes_yf():
                         "volume_financeiro": fechamento * volume
                     })
             except KeyError:
-                continue # Ticker não encontrado no lote do Yahoo
+                continue
 
-        # Salva no Supabase em lotes
         lote = 500
         for i in range(0, len(registros), lote):
             supabase.table("cotacoes").upsert(
@@ -698,7 +697,7 @@ def pagina_rankings():
             nome = str(row.get('nome', ticker))[:22] + "..." if len(str(row.get('nome', ticker))) > 22 else str(row.get('nome', ticker))
             valor = fmt_func(row.get(col_indicador, 0))
             score = int(row.get('score', 0))
-            setor = str(row.get('setor', 'N/A'))[:15] + "..." if len(str(row.get('setor', 'N/A'))) > 15 else str(row.get('setor', 'N/A'))
+            setor = str(row.get('setor', 'N/A'))[:15] + "..." if len(str(row.get('setor', 'N/A'))) > 15 else str(row.get('setor', 'N/A')))
             if score >= 80: badge_bg, badge_text, badge_label = "#065f46", "#10b981", "Excelente"
             elif score >= 60: badge_bg, badge_text, badge_label = "#3f6212", "#84cc16", "Bom"
             elif score >= 40: badge_bg, badge_text, badge_label = "#92400e", "#f59e0b", "Regular"
@@ -787,15 +786,9 @@ def pagina_comparativo():
 # 8. ROTEADOR PRINCIPAL
 # ==========================================================
 def main():
-        # BOTÃO SECRETO PARA LIMPAR CACHE
-    if st.button("🧹 Limpar Cache", help="Clique aqui se os dados estiverem desatualizados"):
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.rerun()
-    # GATILHO SECRETO PARA O CRON-JOB.ORG (ETL COTAÇÕES)
     if "etl_cotacoes" in st.query_params:
         rodar_etl_cotacoes_yf()
-        return # Interrompe aqui, não carrega o resto do site
+        return
 
     if "pagina_atual" not in st.session_state:
         st.session_state["pagina_atual"] = "home"
@@ -808,7 +801,6 @@ def main():
     else:
         ticker_destino_temp = None
 
-    # --- MENU HORIZONTAL CENTRALIZADO ACIMA DO HEADER ---
     cols_nav = st.columns([2, 1, 1, 1, 1, 2])
     pages = [
         ("home", "🏠 Home"), 
@@ -825,7 +817,6 @@ def main():
             
     st.markdown("<div style='margin-top: 0px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
 
-    # --- HEADER ---
     pagina = st.session_state["pagina_atual"]
     ticker_dest = ticker_destino_temp
     if not ticker_dest and pagina == "analise":
@@ -837,7 +828,6 @@ def main():
     if ticker_destino_temp:
         st.session_state["ticker_destino"] = None
 
-    # CONTEÚDO DA PÁGINA
     if pagina == "home": pagina_home()
     elif pagina == "analise": pagina_analise()
     elif pagina == "rankings": pagina_rankings()
