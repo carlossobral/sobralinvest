@@ -787,6 +787,11 @@ def pagina_comparativo():
 # 8. ROTEADOR PRINCIPAL
 # ==========================================================
 def main():
+        # BOTÃO SECRETO PARA LIMPAR CACHE
+    if st.button("🧹 Limpar Cache", help="Clique aqui se os dados estiverem desatualizados"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.rerun()
     # GATILHO SECRETO PARA O CRON-JOB.ORG (ETL COTAÇÕES)
     if "etl_cotacoes" in st.query_params:
         rodar_etl_cotacoes_yf()
