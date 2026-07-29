@@ -697,7 +697,7 @@ def pagina_rankings():
             nome = str(row.get('nome', ticker))[:22] + "..." if len(str(row.get('nome', ticker))) > 22 else str(row.get('nome', ticker))
             valor = fmt_func(row.get(col_indicador, 0))
             score = int(row.get('score', 0))
-            setor = str(row.get('setor', 'N/A'))[:15] + "..." if len(str(row.get('setor', 'N/A'))) > 15 else str(row.get('setor', 'N/A')))
+            setor = str(row.get('setor', 'N/A'))[:15] + "..." if len(str(row.get('setor', 'N/A'))) > 15 else str(row.get('setor', 'N/A'))
             if score >= 80: badge_bg, badge_text, badge_label = "#065f46", "#10b981", "Excelente"
             elif score >= 60: badge_bg, badge_text, badge_label = "#3f6212", "#84cc16", "Bom"
             elif score >= 40: badge_bg, badge_text, badge_label = "#92400e", "#f59e0b", "Regular"
