@@ -167,18 +167,18 @@ def carregar_dados_dfp():
         
         # Filtra apenas colunas necessárias
         # As colunas no DFP são: CNPJ_CIA, DT_REFER, VERSAO, DENOM_CIA, TP_DOC, etc...
-        # Vamos selecionar as que nos interessam
+        # Filtra apenas colunas necessárias
         col_cnpj = 'CNPJ_CIA'
         col_data = 'DT_REFER'
         col_total = 'QT_ACAO_TOTAL_CAP_INTEGR' # Total de Ações
-        col_tesouraria = 'QT_ACAO_TOTAL_TESOUR'  # Ações em Tesouraria
+        col_tesouraria = 'QT_ACAO_TOTAL_TESOURO' # Ações em Tesouraria (com 'O' no final!)
         
         # Se as colunas não baterem exatamente, tenta achar pelo nome parecido
         if col_total not in df_completo.columns:
             for c in df_completo.columns:
                 if 'TOTAL' in c and 'CAP' in c and 'INTEGR' in c:
                     col_total = c
-                if 'TOTAL' in c and 'TESOUR' in c:
+                if 'TOTAL' in c and 'TESOURO' in c: # Corrigido para TESOURO
                     col_tesouraria = c
 
         df_completo = df_completo[[col_cnpj, col_data, col_total, col_tesouraria]].copy()
