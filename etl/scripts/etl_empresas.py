@@ -9,7 +9,7 @@ from etl.database.supabase_client import supabase
 
 URL_MFINANCE = "https://mfinance.com.br/api/v1/stocks"
 URL_CVM_CADASTRO = "https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv"
-URL_DFP_BASE = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS/dfp_cia_aberta_{ano}.zip"
+URL_FRE_BASE = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/FRE/DADOS/fre_cia_aberta_{ano}.zip"
 
 TICKERS_IGNORADOS = {
     "AFLT3", "AHEB3", "AHEB5", "AHEB6", "APTI3", "APTI4", "AURA33", "BALM3", 
@@ -130,78 +130,59 @@ def buscar_cadastro_cvm():
         print(f"   ❌ Erro ao baixar CVM: {e}")
         return pd.DataFrame(columns=['cnpj', 'cd_cvm', 'data_registro_cvm'])
 
-def carregar_dados_dfp():
-    print("4. Baixando e processando DFP (Composição de Capital)...")
+def buscar_fre_mais_recente():
+    ano = datetime.now().year
+    while ano >= 2010:
+        url = URL_FRE_BASE.format(ano=ano)
+        try:
+            print(f"   Tentando FRE {ano}...")
+            r = httpx.get(url, timeout=300, follow_redirects=True)
+            if r.status_code == 200:
+                print(f"   ✅ FRE encontrado: {ano}")
+                return r.content, ano
+        except Exception:
+            pass
+        ano -= 1
+    raise Exception("Nenhum FRE encontrado.")
+
+def carregar_dados_fre():
+    print("4. Baixando e processando FRE (Ações Totais e Circulação)...")
     try:
-        # Baixa DFP do ano atual e do ano anterior para garantir que pegamos todos
-        ano_atual = datetime.now().year
-        anos_para_buscar = [ano_atual, ano_atual - 1]
+        zip_content, ano = buscar_fre_mais_recente()
+        z = ZipFile(BytesIO(zip_content))
         
-        dfs = []
+        capital_file = f"fre_cia_aberta_capital_social_{ano}.csv"
+        circulacao_file = f"fre_cia_aberta_distribuicao_capital_{ano}.csv"
         
-        for ano in anos_para_buscar:
-            url = URL_DFP_BASE.format(ano=ano)
-            try:
-                print(f"   Tentando DFP {ano}...")
-                r = httpx.get(url, timeout=300, follow_redirects=True)
-                if r.status_code == 200:
-                    print(f"   ✅ DFP {ano} encontrado.")
-                    z = ZipFile(BytesIO(r.content))
-                    # O arquivo dentro do zip segue o padrão dfp_cia_aberta_composicao_capital_{ano}.csv
-                    capital_file = f"dfp_cia_aberta_composicao_capital_{ano}.csv"
-                    
-                    if capital_file in z.namelist():
-                        df_cap = pd.read_csv(z.open(capital_file), sep=";", encoding="latin1", low_memory=False)
-                        dfs.append(df_cap)
-                    else:
-                        print(f"   Arquivo {capital_file} não encontrado no zip do DFP {ano}.")
-                elif r.status_code == 404:
-                    print(f"   DFP {ano} não disponível (404).")
-            except Exception as e:
-                print(f"   Erro ao baixar DFP {ano}: {e}")
-                
-        if not dfs:
-            raise Exception("Nenhum arquivo DFP de composição de capital foi encontrado.")
-
-        df_completo = pd.concat(dfs, ignore_index=True)
+        df_capital = pd.read_csv(z.open(capital_file), sep=";", encoding="latin1", low_memory=False)
         
-        # Filtra apenas colunas necessárias
-        # As colunas no DFP são: CNPJ_CIA, DT_REFER, VERSAO, DENOM_CIA, TP_DOC, etc...
-        # Filtra apenas colunas necessárias
-        col_cnpj = 'CNPJ_CIA'
-        col_data = 'DT_REFER'
-        col_total = 'QT_ACAO_TOTAL_CAP_INTEGR' # Total de Ações
-        col_tesouraria = 'QT_ACAO_TOTAL_TESOURO' # Ações em Tesouraria (com 'O' no final!)
+        # ==========================================
+        # SOLUÇÃO APLICADA: Filtrar apenas 'Capital Emitido'
+        # ==========================================
+        df_capital = df_capital[df_capital["Tipo_Capital"] == "Capital Emitido"].copy()
         
-        # Se as colunas não baterem exatamente, tenta achar pelo nome parecido
-        if col_total not in df_completo.columns:
-            for c in df_completo.columns:
-                if 'TOTAL' in c and 'CAP' in c and 'INTEGR' in c:
-                    col_total = c
-                if 'TOTAL' in c and 'TESOURO' in c: # Corrigido para TESOURO
-                    col_tesouraria = c
-
-        df_completo = df_completo[[col_cnpj, col_data, col_total, col_tesouraria]].copy()
-        df_completo.columns = ['cnpj', 'data_referencia', 'qtd_acoes_totais', 'qtd_acoes_tesouraria']
+        df_capital["cnpj"] = df_capital["CNPJ_Companhia"].apply(normalizar_cnpj)
+        capital = (
+            df_capital.groupby("cnpj")["Quantidade_Total_Acoes"]
+            .max() # Segurança extra para duplicidades
+            .reset_index()
+            .rename(columns={"Quantidade_Total_Acoes": "qtd_acoes_totais"})
+        )
         
-        # Limpeza
-        df_completo['cnpj'] = df_completo['cnpj'].apply(normalizar_cnpj)
-        df_completo['data_referencia'] = pd.to_datetime(df_completo['data_referencia'], errors='coerce')
-        df_completo['qtd_acoes_totais'] = pd.to_numeric(df_completo['qtd_acoes_totais'], errors='coerce')
-        df_completo['qtd_acoes_tesouraria'] = pd.to_numeric(df_completo['qtd_acoes_tesouraria'], errors='coerce').fillna(0)
+        df_circ = pd.read_csv(z.open(circulacao_file), sep=";", encoding="latin1", low_memory=False)
+        df_circ["cnpj"] = df_circ["CNPJ_Companhia"].apply(normalizar_cnpj)
+        circulacao = (
+            df_circ.groupby("cnpj")["Quantidade_Total_Acoes_Circulacao"]
+            .sum() # Aqui somamos pois cada linha é um ticker diferente (ON, PN, Unit)
+            .reset_index()
+            .rename(columns={"Quantidade_Total_Acoes_Circulacao": "qtd_acoes_circulacao"})
+        )
         
-        # Ordena por data e remove duplicadas, ficando com a mais recente
-        df_completo = df_completo.sort_values(by=['cnpj', 'data_referencia'], ascending=[True, False])
-        df_completo = df_completo.drop_duplicates(subset=['cnpj'], keep='first')
-        
-        # Calcula Ações em Circulação
-        df_completo['qtd_acoes_circulacao'] = df_completo['qtd_acoes_totais'] - df_completo['qtd_acoes_tesouraria']
-        
-        print(f"   ✅ {len(df_completo)} registros de composição de capital processados.")
-        return df_completo
-        
+        df_fre = capital.merge(circulacao, on="cnpj", how="left")
+        print(f"   ✅ {len(df_fre)} registros de capital social encontrados.")
+        return df_fre
     except Exception as e:
-        print(f"   ❌ Erro no DFP: {e}")
+        print(f"   ❌ Erro no FRE: {e}")
         return pd.DataFrame(columns=['cnpj', 'qtd_acoes_totais', 'qtd_acoes_circulacao'])
 
 def main():
@@ -209,7 +190,7 @@ def main():
         df_mfinance = buscar_mfinance()
         df_cnpj, mapa_ticker_cnpj = buscar_cnpj_xlsx()
         df_cvm = buscar_cadastro_cvm()
-        df_dfp = carregar_dados_dfp()
+        df_fre = carregar_dados_fre()
         
         if df_mfinance.empty:
             print("❌ MFinance vazio. Abortando.")
@@ -235,8 +216,8 @@ def main():
         # Merge com CVM (cd_cvm e data_registro_cvm)
         df_final = df_final.merge(df_cvm, on="cnpj", how="left")
         
-        # Merge com DFP (Totais e Circulação)
-        df_final = df_final.merge(df_dfp, on="cnpj", how="left")
+        # Merge com FRE (Totais e Circulação)
+        df_final = df_final.merge(df_fre, on="cnpj", how="left")
         
         # ==========================================
         # TRATAMENTO FINAL DOS DADOS
