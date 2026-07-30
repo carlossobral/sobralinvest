@@ -157,9 +157,9 @@ def carregar_dados_fre():
         df_capital = pd.read_csv(z.open(capital_file), sep=";", encoding="latin1", low_memory=False)
         
         # ==========================================
-        # SOLUÇÃO APLICADA: Filtrar apenas 'Capital Emitido'
+        # SOLUÇÃO APLICADA: Filtrar apenas 'Capital Integralizado'
         # ==========================================
-        df_capital = df_capital[df_capital["Tipo_Capital"] == "Capital Emitido"].copy()
+        df_capital = df_capital[df_capital["Tipo_Capital"] == "Capital Integralizado"].copy()
         
         df_capital["cnpj"] = df_capital["CNPJ_Companhia"].apply(normalizar_cnpj)
         capital = (
