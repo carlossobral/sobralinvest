@@ -35,7 +35,7 @@ def main():
                     BASE_URL,
                     params={
                         "symbols": ticker,
-                        "range": "30d",
+                        "range": "3mo",
                         "interval": "1d",
                         "token": BRAPI_TOKEN,
                     },
