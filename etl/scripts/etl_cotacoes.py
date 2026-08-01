@@ -1,9 +1,9 @@
 from datetime import datetime, date, UTC
 import httpx
-import os
 from etl.database.supabase_client import supabase
+from etl.config.settings import settings
 
-BRAPI_TOKEN = os.environ["BRAPI_TOKEN"]
+BRAPI_TOKEN = settings.brapi_token
 BASE_URL = "https://brapi.dev/api/v2/stocks/historical"
 
 def registrar_carga(status: str, registros: int, mensagem: str):
