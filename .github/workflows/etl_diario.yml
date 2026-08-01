@@ -28,6 +28,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          BRAPI_TOKEN: ${{ secrets.BRAPI_TOKEN }}
         run: |
          # echo "Iniciando ETL Empresas..."
          # python -m etl.scripts.etl_empresas
