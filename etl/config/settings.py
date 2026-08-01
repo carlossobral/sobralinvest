@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default="")
     supabase_url: str = Field(default="")
     supabase_key: str = Field(default="")
+    brapi_token: str = Field(default="")
 
     model_config = SettingsConfigDict(
         env_file=".env",
