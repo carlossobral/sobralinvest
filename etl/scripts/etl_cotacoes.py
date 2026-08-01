@@ -1,130 +1,94 @@
-from datetime import datetime, UTC
-
+from datetime import datetime, date, UTC
 import httpx
-import pandas as pd
-
+import os
 from etl.database.supabase_client import supabase
 
-
-BASE_URL = "https://mfinance.com.br/api/v1/stocks/historicals"
-
+BRAPI_TOKEN = os.environ["BRAPI_TOKEN"]
+BASE_URL = "https://brapi.dev/api/v2/stocks/historical"
 
 def registrar_carga(status: str, registros: int, mensagem: str):
-    supabase.table("etl_cargas").insert(
-        {
-            "processo": "etl_cotacoes",
-            "inicio": datetime.now(UTC).isoformat(),
-            "status": status,
-            "registros": registros,
-            "mensagem": mensagem,
-        }
-    ).execute()
-
+    supabase.table("etl_cargas").insert({
+        "processo": "etl_cotacoes",
+        "inicio": datetime.now(UTC).isoformat(),
+        "status": status,
+        "registros": registros,
+        "mensagem": mensagem,
+    }).execute()
 
 def obter_tickers():
-    resposta = (
-        supabase
-        .table("empresas")
-        .select("ticker")
-        .execute()
-    )
-
+    resposta = supabase.table("empresas").select("ticker").execute()
     return [x["ticker"] for x in resposta.data]
 
-
 def main():
-
     total_registros = 0
+    hoje = date.today().isoformat()
 
     try:
-
         tickers = obter_tickers()
-
         print(f"Empresas encontradas: {len(tickers)}")
 
         for i, ticker in enumerate(tickers, start=1):
-
             try:
-
-                print(f"[{i}/{len(tickers)}] {ticker}")
+                print(f"[{i}/{len(tickers)}] {ticker}", end=" ")
 
                 response = httpx.get(
-                    f"{BASE_URL}/{ticker}",
-                    timeout=60
+                    BASE_URL,
+                    params={
+                        "symbols": ticker,
+                        "range": "5d",
+                        "interval": "1d",
+                        "token": BRAPI_TOKEN,
+                    },
+                    timeout=30,
                 )
-
                 response.raise_for_status()
-
                 payload = response.json()
 
-                historicos = payload.get("historicals", [])
+                resultados = payload.get("results", [])
+                if not resultados:
+                    print("Sem dados.")
+                    continue
 
-                registros = []
+                historico = resultados[0].get("data", {}).get("historicalDataPrice", [])
+                if not historico:
+                    print("Sem histórico.")
+                    continue
 
-                for item in historicos:
-                    # Pré-calcula o volume financeiro na ingestão
-                    volume = item.get("volume", 0) or 0
-                    fechamento = item.get("close", 0) or 0
-                    
-                    # Converte para float para garantir cálculo correto
-                    try:
-                        volume_num = float(volume)
-                        fechamento_num = float(fechamento)
-                        volume_financeiro = volume_num * fechamento_num
-                    except (ValueError, TypeError):
-                        volume_financeiro = 0
+                # Pega só o registro mais recente
+                ultimo = historico[-1]
+                adjusted_close = ultimo.get("adjustedClose")
+                volume = ultimo.get("volume", 0) or 0
+                data_pregao = date.fromtimestamp(ultimo["date"]).isoformat()
 
-                    registros.append(
-                        {
-                            "ticker": ticker,
-                            "data": item["date"][:10],
-                            "abertura": item.get("open"),
-                            "maxima": item.get("high"),
-                            "minima": item.get("low"),
-                            "fechamento": fechamento,
-                            "volume": volume,
-                            "volume_financeiro": volume_financeiro,
-                        }
-                    )
+                if not adjusted_close:
+                    print("adjustedClose ausente.")
+                    continue
 
-                if registros:
+                volume_financeiro = float(adjusted_close) * float(volume)
 
-                    (
-                        supabase
-                        .table("cotacoes")
-                        .upsert(
-                            registros,
-                            on_conflict="ticker,data"
-                        )
-                        .execute()
-                    )
+                supabase.table("cotacoes").upsert(
+                    {
+                        "ticker": ticker,
+                        "data": data_pregao,
+                        "fechamento": adjusted_close,
+                        "volume": volume,
+                        "volume_financeiro": volume_financeiro,
+                    },
+                    on_conflict="ticker,data"
+                ).execute()
 
-                    total_registros += len(registros)
+                total_registros += 1
+                print(f"✅ {data_pregao} | R$ {adjusted_close} | vol {volume:,}")
 
             except Exception as erro:
+                print(f"ERRO: {erro}")
 
-                print(f"Erro em {ticker}: {erro}")
-
-        registrar_carga(
-            status="SUCESSO",
-            registros=total_registros,
-            mensagem="Carga de cotações concluída"
-        )
-
-        print(
-            f"✅ Total de registros carregados: {total_registros}"
-        )
+        registrar_carga("SUCESSO", total_registros, "Carga de cotações concluída")
+        print(f"\n✅ Total: {total_registros} registros atualizados.")
 
     except Exception as erro:
-
-        registrar_carga(
-            status="ERRO",
-            registros=0,
-            mensagem=str(erro)
-        )
-
+        registrar_carga("ERRO", 0, str(erro))
         raise
-
 
 if __name__ == "__main__":
     main()
