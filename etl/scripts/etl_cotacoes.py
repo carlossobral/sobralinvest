@@ -35,11 +35,11 @@ def main():
                     BASE_URL,
                     params={
                         "symbols": ticker,
-                        "range": "5d",
+                        "range": "30d",
                         "interval": "1d",
                         "token": BRAPI_TOKEN,
                     },
-                    timeout=30,
+                    timeout=60,
                 )
                 response.raise_for_status()
                 payload = response.json()
