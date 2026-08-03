@@ -70,8 +70,8 @@ def main():
                         continue
 
                     data = item.get("date")
-                    if data[:10] < "2015-01-01":
-                       continue
+                    #if data[:10] < "2015-01-01":
+                     #  continue
                     tipo = item.get("type")
                     valor = item.get("value")
 
